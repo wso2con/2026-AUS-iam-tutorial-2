@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireScope } from "../../../../../lib/auth/guard";
 import { Scope } from "../../../../../lib/auth/utils";
 import { scimGetRoleById, scimUpdateRoleUsers } from "../../../../../lib/asgardeo/client";
+import { logger } from "../../../../../lib/logging/logger";
+
+const routeLogger = logger.child({ route: "organization/roles/[id]/users" });
 
 export async function PUT(
   request: NextRequest,
@@ -31,7 +34,7 @@ export async function PUT(
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error(`[organization/roles/${id}/users] Failed to update role users.`, error);
+    routeLogger.error({ err: error, roleId: id }, "Failed to update role users");
     return NextResponse.json({ message: "Failed to update role assignments." }, { status: 500 });
   }
 }

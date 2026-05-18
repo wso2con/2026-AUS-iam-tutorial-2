@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireScope } from "../../../../lib/auth/guard";
 import { Scope } from "../../../../lib/auth/utils";
 import { scimUpdateAccountLocked } from "../../../../lib/asgardeo/client";
+import { logger } from "../../../../lib/logging/logger";
+
+const routeLogger = logger.child({ route: "organization/users/[id]" });
 
 type PatchRequest = { locked?: boolean };
 
@@ -28,7 +31,7 @@ export async function PATCH(
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error(`[organization/users/${id}] Failed to update account lock status.`, error);
+    routeLogger.error({ err: error, userId: id }, "Failed to update account lock status");
     return NextResponse.json({ message: "Failed to update account status." }, { status: 500 });
   }
 }

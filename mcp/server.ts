@@ -62,74 +62,23 @@ const host = process.env.HOST || "localhost";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-const enterpriseFares = [
-    {
-        id: "f1",
-        airline: "SriLankan Airlines",
-        route: "Colombo to Singapore",
-        cabin: "Economy",
-        price: 482,
-        duration: "3h 30m",
-        refundable: true,
-        gds: "Amadeus",
-        policyStatus: "in-policy",
-    },
-    {
-        id: "f2",
-        airline: "Singapore Airlines",
-        route: "Colombo to Singapore",
-        cabin: "Economy",
-        price: 540,
-        duration: "3h 45m",
-        refundable: false,
-        gds: "Sabre",
-        policyStatus: "in-policy",
-    },
-    {
-        id: "f3",
-        airline: "Emirates",
-        route: "Colombo to Singapore",
-        cabin: "Business",
-        price: 2180,
-        duration: "4h 00m",
-        refundable: true,
-        gds: "Amadeus",
-        policyStatus: "out-of-policy",
-    },
-    {
-        id: "f4",
-        airline: "Malaysia Airlines",
-        route: "Colombo to Singapore",
-        cabin: "Economy",
-        price: 468,
-        duration: "4h 15m",
-        refundable: false,
-        gds: "Galileo",
-        policyStatus: "in-policy",
-    },
-    {
-        id: "f5",
-        airline: "Qatar Airways",
-        route: "Colombo to Tokyo",
-        cabin: "Premium Economy",
-        price: 1320,
-        duration: "12h 10m",
-        refundable: true,
-        gds: "Amadeus",
-        policyStatus: "approval-required",
-    },
-    {
-        id: "f6",
-        airline: "Cathay Pacific",
-        route: "Colombo to London",
-        cabin: "Economy",
-        price: 1140,
-        duration: "14h 20m",
-        refundable: false,
-        gds: "Sabre",
-        policyStatus: "in-policy",
-    },
-] as const;
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+    const [, payload] = token.split(".");
+
+    if (!payload) {
+        return null;
+    }
+
+    try {
+        return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>;
+    } catch {
+        return null;
+    }
+}
+
+function getBearerToken(authorization?: string) {
+    return authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
+}
 
 function getAuthorizationHeader(request: IncomingMessage): string | undefined {
     const authorization = request.headers.authorization;
@@ -140,6 +89,7 @@ function getAuthorizationHeader(request: IncomingMessage): string | undefined {
 function createApiClient(authorization?: string) {
     async function requestApi(path: string, options: RequestInit = {}): Promise<JsonValue> {
         const headers = new Headers(options.headers);
+        const method = options.method ?? "GET";
 
         headers.set("Accept", "application/json");
 
@@ -151,10 +101,16 @@ function createApiClient(authorization?: string) {
             headers.set("Authorization", authorization);
         }
 
+        console.log("[mcp] forwarding app request", method, path);
+
         const response = await fetch(`${appBaseUrl}${path}`, {
             ...options,
             headers,
+            signal: AbortSignal.timeout(30000),
         });
+
+        console.log("[mcp] app response received", method, path, response.status);
+
         const contentType = response.headers.get("content-type") || "";
         const body = contentType.includes("application/json")
             ? await response.json()
@@ -193,16 +149,38 @@ function toToolContent(data: JsonValue) {
 
 function createEnterpriseMcpServer(authorization?: string) {
     const api = createApiClient(authorization);
+    const tokenPayload = decodeJwtPayload(getBearerToken(authorization));
     const server = new McpServer({
         name: "wayfinder-enterprise-mcp",
         version: "1.0.0",
     });
 
     server.tool(
-        "get_travel_policy",
-        "Get the active travel policy for the authenticated organization.",
+        "get_current_access_context",
+        "Get the authenticated subject, actor, roles, organization, and scopes from the current access token.",
         {},
-        async () => toToolContent(await api.get("/api/travel-policies")),
+        async () => toToolContent({
+            actor: tokenPayload?.act ?? null,
+            organizationId: typeof tokenPayload?.org_id === "string" ? tokenPayload.org_id : "",
+            roles: Array.isArray(tokenPayload?.roles)
+                ? tokenPayload.roles.map(String)
+                : typeof tokenPayload?.roles === "string"
+                ? [tokenPayload.roles]
+                : [],
+            scopes: typeof tokenPayload?.scope === "string" ? tokenPayload.scope.split(" ") : [],
+            subject: typeof tokenPayload?.sub === "string" ? tokenPayload.sub : "",
+        } as JsonValue),
+    );
+
+    server.tool(
+        "get_travel_policy",
+        "Get the active travel policy for the authenticated organization. Use this before answering travel-policy questions and before creating a flight booking.",
+        {},
+        async () => {
+            console.log("[mcp] get_travel_policy tool invoked");
+
+            return toToolContent(await api.get("/api/travel-policies"));
+        },
     );
 
     server.tool(
@@ -210,10 +188,8 @@ function createEnterpriseMcpServer(authorization?: string) {
         "Update the active travel policy for the authenticated organization.",
         {
             domestic_cabin: z.enum(["Economy", "Premium Economy", "Business", "First Class"]).optional(),
-            intl_cabin: z.enum(["Economy", "Premium Economy", "Business", "First Class"]).optional(),
-            long_haul_hours: z.number().int().min(1).max(24).optional(),
+            max_flight_price: z.number().int().min(0).max(100000).optional(),
             price_cap_percent: z.number().int().min(0).max(200).optional(),
-            min_days_advance: z.number().int().min(0).max(90).optional(),
         },
         async (policy) => toToolContent(await api.put("/api/travel-policies", policy as JsonValue)),
     );
@@ -251,43 +227,51 @@ function createEnterpriseMcpServer(authorization?: string) {
 
     server.tool(
         "search_enterprise_flights",
-        "Search sample enterprise flight options and policy status.",
+        "Search available flight options from the Wayfinder booking database.",
         {
-            from: z.string().optional().describe("Origin city."),
-            to: z.string().optional().describe("Destination city."),
+            from: z.string().optional().describe("Origin city, for example New York."),
+            to: z.string().optional().describe("Destination city, for example Los Angeles."),
             cabin: z.enum(["Economy", "Premium Economy", "Business", "First Class"]).optional(),
-            gds: z.enum(["Amadeus", "Sabre", "Galileo"]).optional(),
-            refundable: z.boolean().optional(),
         },
-        async ({ from, to, cabin, gds, refundable }) => {
-            const normalizedFrom = from?.toLowerCase();
-            const normalizedTo = to?.toLowerCase();
-            const results = enterpriseFares.filter((fare) => {
-                if (normalizedFrom && !fare.route.toLowerCase().startsWith(normalizedFrom)) {
-                    return false;
-                }
+        async ({ from, to, cabin }) => {
+            const params = new URLSearchParams();
 
-                if (normalizedTo && !fare.route.toLowerCase().endsWith(normalizedTo)) {
-                    return false;
-                }
+            if (from) params.set("from", from);
+            if (to) params.set("to", to);
+            if (cabin) params.set("cabin", cabin);
 
-                if (cabin && fare.cabin !== cabin) {
-                    return false;
-                }
+            const path = `/api/flights${params.size > 0 ? `?${params.toString()}` : ""}`;
 
-                if (gds && fare.gds !== gds) {
-                    return false;
-                }
-
-                if (refundable !== undefined && fare.refundable !== refundable) {
-                    return false;
-                }
-
-                return true;
-            });
-
-            return toToolContent({ flights: results } as JsonValue);
+            return toToolContent(await api.get(path));
         },
+    );
+
+    server.tool(
+        "list_flight_bookings",
+        "List flight bookings visible to the authenticated user.",
+        {
+            all: z.boolean().optional().describe("When true, admins can list all organization bookings."),
+        },
+        async ({ all }) => toToolContent(await api.get(`/api/bookings${all ? "?all=true" : ""}`)),
+    );
+
+    server.tool(
+        "create_flight_booking",
+        "Create a flight booking for the authenticated user. Only use after get_travel_policy has been called in the current turn and a single matching flight is clear.",
+        {
+            bookedByName: z.string().optional().describe("Display name of the user making the booking."),
+            bookedForName: z.string().optional().describe("Display name of the traveler when an admin books for someone else."),
+            bookedForUserId: z.string().optional().describe("User ID of the traveler when an admin books for someone else."),
+            flightId: z.string().describe("The ID of the flight to book."),
+            travelers: z.number().int().min(1).max(9).optional().describe("Number of travelers."),
+        },
+        async ({ bookedByName, bookedForName, bookedForUserId, flightId, travelers }) => toToolContent(await api.post("/api/bookings", {
+            bookedByName: bookedByName ?? "AI-assisted user",
+            bookedForName: bookedForName ?? "",
+            bookedForUserId: bookedForUserId ?? "",
+            flightId,
+            travelers: travelers ?? 1,
+        })),
     );
 
     return server;

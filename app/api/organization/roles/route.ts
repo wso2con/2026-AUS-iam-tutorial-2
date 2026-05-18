@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireScope } from "../../../lib/auth/guard";
 import { ASGARDEO_ROLE_TO_USER_ROLE, Scope } from "../../../lib/auth/utils";
 import { scimListRolesWithUsers } from "../../../lib/asgardeo/client";
+import { logger } from "../../../lib/logging/logger";
+
+const routeLogger = logger.child({ route: "organization/roles" });
 
 export async function GET(request: NextRequest) {
   const auth = await requireScope(request, [Scope.ROLE_VIEW]);
@@ -25,7 +28,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ roles });
   } catch (error) {
-    console.error("[organization/roles] Failed to list roles.", error);
+    routeLogger.error({ err: error }, "Failed to list roles");
     return NextResponse.json({ message: "Failed to fetch roles." }, { status: 500 });
   }
 }

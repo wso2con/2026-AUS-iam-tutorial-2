@@ -153,6 +153,29 @@ const agentConfig = {
     agentSecret: getEnv("AGENT_SECRET"),
 };
 
+const DEFAULT_ORGANIZATION_API_SCOPES = [
+    "openid",
+    "internal_org_user_mgt_create",
+    "internal_org_user_mgt_list",
+    "internal_org_user_mgt_update",
+    "internal_org_role_mgt_view",
+    "internal_org_role_mgt_users_update",
+    "create_travel_policy",
+    "view_travel_policy",
+    "update_travel_policy",
+    "delete_travel_policy",
+    "view_booking",
+    "create_booking",
+    "delete_booking",
+].join(" ");
+
+const appBaseUrl = (getEnv("APP_BASE_URL") || "http://localhost:3000").replace(/\/$/, "");
+const autonomousTravelPolicyScopes = getEnv("AGENT_TRAVEL_POLICY_SCOPES") || "view_travel_policy";
+const delegatedBookingScopes = getEnv("DELEGATED_BOOKING_SCOPES") || "create_booking";
+const delegatedUserOrganizationScopes = getEnv("DELEGATED_USER_ORG_SCOPES") || DEFAULT_ORGANIZATION_API_SCOPES;
+const oboRedirectUri = getEnv("OBO_REDIRECT_URI") || new URL("/obo/callback", asgardeoConfig.afterSignInUrl).toString();
+const oboResource = getEnv("OBO_RESOURCE");
+
 const model = new ChatGoogleGenerativeAI({
     apiKey: getEnv("GOOGLE_API_KEY"),
     model: getEnv("MODEL_NAME") || "gemini-2.5-flash",
@@ -160,7 +183,17 @@ const model = new ChatGoogleGenerativeAI({
 
 const agentPrompt = [
     "You are Wayfinder Enterprise's AI assistant for business travel administrators and employees.",
-    "Help users understand travel policies, organization users and roles, and compliant flight options by using the available MCP tools.",
+    "Help users understand travel policies, organization users and roles, and available flight options by using the available MCP tools.",
+    "Do not mention Asgardeo, OAuth, OBO, access tokens, scopes, requested_actor, or other identity-platform implementation details to the user.",
+    "Refer to sign-in and consent as Wayfinder authorization.",
+    "Use autonomous agent access for read-only operational questions such as showing travel policies, roles, users, and fare options.",
+    "Use delegated user access for user-requested changes such as updating policy fields or inviting employees.",
+    "For any request to show, explain, use, or evaluate travel policy, call get_travel_policy before answering.",
+    "If no travel policy is configured for the organization, do not block flight search or booking; treat all available flights as allowed.",
+    "When a logged-out user asks to book a flight, ask for their organization name before starting delegated authorization.",
+    "When a user asks to book a flight and organization context is available, start delegated authorization, then call get_current_access_context, call get_travel_policy, find the matching flight with search_enterprise_flights, and call create_flight_booking only after the flight is clear.",
+    "Never call create_flight_booking in a turn where get_travel_policy has not already been called.",
+    "If a booking request does not identify a single flight, ask a concise follow-up question instead of guessing.",
     "When a user asks to update a travel policy, call update_travel_policy with only the fields the user clearly asked to change.",
     "When a user asks to invite an employee, call invite_organization_user only when an email address is provided.",
     "Keep answers concise and business-focused.",
@@ -175,6 +208,79 @@ type ChatMessage = {
 type ChatRequest = {
     message?: unknown;
     messages?: unknown;
+    mode?: unknown;
+    orgId?: unknown;
+    orgName?: unknown;
+};
+
+type ChatInvocationMode = "agent" | "user";
+
+type ParsedChatRequest = {
+    messages: ChatMessage[];
+    mode?: ChatInvocationMode;
+    orgId?: string;
+    orgName?: string;
+};
+
+type TravelPolicy = {
+    domestic_cabin: string;
+    max_flight_price: number;
+    price_cap_percent: number;
+};
+
+type Flight = {
+    id: string;
+    from_city: string;
+    to_city: string;
+    airline: string;
+    departure_time: string;
+    arrival_time: string;
+    duration: string;
+    stops: number;
+    price: number;
+    currency: string;
+    cabin: string;
+    dates: string;
+    tags: string[];
+};
+
+type PolicyStatus = "in-policy" | "approval-required" | "out-of-policy";
+
+type SuggestedFlight = Flight & {
+    policyStatus: PolicyStatus;
+    policyNotes: string[];
+};
+
+type BookingSearchCriteria = {
+    departureDate?: string;
+    from?: string;
+    to?: string;
+};
+
+type AgentInvokeResult = {
+    messages: Array<{ content?: unknown }>;
+};
+
+type RunnableAgent = {
+    invoke: (input: { messages: ChatMessage[] }) => Promise<AgentInvokeResult>;
+};
+
+type AgentRuntime = {
+    agent: RunnableAgent;
+    client: MultiServerMCPClient;
+    tools: ToolWithSchema[];
+};
+
+type RootAgentRuntime = {
+    agentActorToken: string;
+};
+
+type PendingDelegation = {
+    createdAt: number;
+    flightId?: string;
+    orgId?: string;
+    request: ParsedChatRequest;
+    socket: Duplex;
 };
 
 type WebSocketFrame = {
@@ -319,13 +425,29 @@ function sanitizeToolSchemasForGemini<T extends ToolWithSchema>(tools: T[]): T[]
     });
 }
 
-function parseChatRequest(payload: string): ChatMessage[] {
+function parseChatRequest(payload: string): ParsedChatRequest {
 
     try {
         const request = JSON.parse(payload) as ChatRequest;
+        const orgId = typeof request.orgId === "string" && request.orgId.trim()
+            ? request.orgId.trim()
+            : undefined;
+        const explicitOrgName = typeof request.orgName === "string" && request.orgName.trim()
+            ? request.orgName.trim()
+            : undefined;
+        const mode = request.mode === "agent" || request.mode === "user"
+            ? request.mode
+            : undefined;
 
         if (typeof request.message === "string" && request.message.trim()) {
-            return [{ role: "user", content: request.message }];
+            const messages = [{ role: "user" as const, content: request.message }];
+
+            return {
+                messages,
+                mode,
+                orgId,
+                orgName: explicitOrgName ?? inferOrganizationName(messages),
+            };
         }
 
         if (Array.isArray(request.messages)) {
@@ -343,12 +465,17 @@ function parseChatRequest(payload: string): ChatMessage[] {
             });
 
             if (messages.length > 0) {
-                return messages;
+                return {
+                    messages,
+                    mode,
+                    orgId,
+                    orgName: explicitOrgName ?? inferOrganizationName(messages),
+                };
             }
         }
     } catch {
         if (payload.trim()) {
-            return [{ role: "user", content: payload }];
+            return { messages: [{ role: "user", content: payload }] };
         }
     }
 
@@ -361,6 +488,438 @@ function getResponseContent(content: unknown): string {
     }
 
     return JSON.stringify(content);
+}
+
+function addContextToFirstUserMessage(messages: ChatMessage[], context: string): ChatMessage[] {
+    let contextAdded = false;
+
+    return messages.map((message) => {
+        if (contextAdded || message.role !== "user") {
+            return message;
+        }
+
+        contextAdded = true;
+
+        return {
+            ...message,
+            content: `${context}\n\n${message.content}`,
+        };
+    });
+}
+
+async function requestAppApi<T>(path: string, accessToken: string, options: RequestInit = {}): Promise<T> {
+    const headers = new Headers(options.headers);
+
+    headers.set("Accept", "application/json");
+    headers.set("Authorization", `Bearer ${accessToken}`);
+
+    if (options.body && !headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+    }
+
+    logger.info({
+        method: options.method ?? "GET",
+        path,
+    }, "Agent direct app API request");
+
+    const response = await fetch(`${appBaseUrl}${path}`, {
+        ...options,
+        headers,
+        signal: AbortSignal.timeout(30000),
+    });
+    const contentType = response.headers.get("content-type") || "";
+    const body = contentType.includes("application/json")
+        ? await response.json().catch(() => ({}))
+        : await response.text();
+
+    logger.info({
+        method: options.method ?? "GET",
+        path,
+        statusCode: response.status,
+    }, "Agent direct app API response");
+
+    if (!response.ok) {
+        throw new Error(`App API request failed with ${response.status}: ${JSON.stringify(body)}`);
+    }
+
+    return body as T;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, description: string): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<never>((_, reject) => {
+                timeout = setTimeout(() => reject(new Error(`${description} timed out after ${timeoutMs}ms`)), timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timeout) {
+            clearTimeout(timeout);
+        }
+    }
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+    const [, payload] = token.split(".");
+
+    if (!payload) {
+        return null;
+    }
+
+    try {
+        return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>;
+    } catch {
+        return null;
+    }
+}
+
+function getBearerToken(authorization?: string | string[]) {
+    const value = Array.isArray(authorization) ? authorization[0] : authorization;
+
+    return value?.startsWith("Bearer ") ? value.slice(7) : "";
+}
+
+function getWebSocketProtocolToken(protocolHeader?: string | string[]) {
+    const value = Array.isArray(protocolHeader) ? protocolHeader[0] : protocolHeader;
+    const protocols = value?.split(",").map((protocol) => protocol.trim()).filter(Boolean) ?? [];
+    const bearerIndex = protocols.indexOf("bearer");
+
+    return bearerIndex >= 0 ? protocols[bearerIndex + 1] ?? "" : "";
+}
+
+function getTokenOrganizationId(token: string): string {
+    const payload = decodeJwtPayload(token);
+
+    return typeof payload?.org_id === "string" ? payload.org_id : "";
+}
+
+async function exchangeOrganizationToken({
+    scopes,
+    switchingOrganizationId,
+    token,
+}: {
+    scopes: string;
+    switchingOrganizationId: string;
+    token: string;
+}) {
+    const credentials = Buffer.from(`${asgardeoConfig.clientId}:${asgardeoConfig.clientSecret}`).toString("base64");
+    const response = await fetch(`${asgardeoConfig.baseUrl}/oauth2/token`, {
+        body: new URLSearchParams({
+            grant_type: "organization_switch",
+            scope: scopes,
+            switching_organization: switchingOrganizationId,
+            token,
+        }),
+        headers: {
+            Authorization: `Basic ${credentials}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method: "POST",
+        signal: AbortSignal.timeout(30000),
+    });
+    const body = await response.json().catch(() => ({})) as {
+        access_token?: string;
+        error?: string;
+        error_description?: string;
+    };
+
+    if (!response.ok || !body.access_token) {
+        throw new Error(body.error_description ?? body.error ?? "Failed to exchange token for the organization.");
+    }
+
+    return body.access_token;
+}
+
+function shouldUseDelegatedUserAccess(messages: ChatMessage[]) {
+    const latestMessage = messages[messages.length - 1]?.content.toLowerCase() || "";
+    const delegatedIntentPattern = /\b(update|change|set|invite|add|create|delete|remove|assign|reset|lock|unlock|disable|enable|upgrade|book|booking|reserve|reservation|confirm)\b/;
+
+    return delegatedIntentPattern.test(latestMessage) || Boolean(inferOrganizationName(messages) && hasBookingIntent(messages));
+}
+
+function resolveInvocationMode(request: ParsedChatRequest): ChatInvocationMode {
+    return request.mode ?? (shouldUseDelegatedUserAccess(request.messages) ? "user" : "agent");
+}
+
+function isBookingIntent(messages: ChatMessage[]) {
+    const latestMessage = messages[messages.length - 1]?.content.toLowerCase() || "";
+
+    return /\b(book|booking|reserve|reservation)\b/.test(latestMessage);
+}
+
+function hasBookingIntent(messages: ChatMessage[]) {
+    return messages.some((message) => (
+        message.role === "user" &&
+        /\b(book|booking|reserve|reservation)\b/i.test(message.content)
+    ));
+}
+
+function shouldPrefetchTravelPolicy(messages: ChatMessage[]) {
+    return messages.some((message) => (
+        message.role === "user" &&
+        /\b(book|booking|reserve|reservation|travel\s+policy|policy)\b/i.test(message.content)
+    ));
+}
+
+function isTravelPolicyIntent(messages: ChatMessage[]) {
+    const latestMessage = messages[messages.length - 1]?.content.toLowerCase() || "";
+
+    return /\b(travel\s+policy|policy|eligible flights?|compliant flights?|available flights?|flights? available|show flights?|list flights?|find flights?)\b/.test(latestMessage);
+}
+
+function getUserMessageText(messages: ChatMessage[]) {
+    return messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.content)
+        .join("\n");
+}
+
+function cleanCriteriaValue(value: string) {
+    return value
+        .replace(/\b(on|for|departing|leaving|date|please|thanks|thank you)\b.*$/i, "")
+        .replace(/[.?!,;:]+$/g, "")
+        .trim();
+}
+
+function extractBookingSearchCriteria(messages: ChatMessage[]): BookingSearchCriteria {
+    const text = getUserMessageText(messages);
+    const criteria: BookingSearchCriteria = {};
+    const routeMatch = text.match(/\bfrom\s+(.+?)\s+to\s+(.+?)(?:\s+(?:on|for|departing|leaving|date)\b|[.?!,;]|\n|$)/i);
+
+    if (routeMatch?.[1]) {
+        criteria.from = cleanCriteriaValue(routeMatch[1]);
+    }
+
+    if (routeMatch?.[2]) {
+        criteria.to = cleanCriteriaValue(routeMatch[2]);
+    }
+
+    const dateMatch = text.match(/\b(?:on|for|departing|leaving|date(?: is)?|departure date(?: is)?)\s+([a-z]{3,9}\s+\d{1,2}(?:,\s*\d{4})?|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|tomorrow|today)\b/i)
+        ?? text.match(/\b((?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?)\b/i);
+
+    if (dateMatch?.[1]) {
+        criteria.departureDate = dateMatch[1].trim();
+    }
+
+    return criteria;
+}
+
+function getMissingBookingCriteria(criteria: BookingSearchCriteria) {
+    const missing: string[] = [];
+
+    if (!criteria.from) missing.push("departure city");
+    if (!criteria.to) missing.push("destination city");
+    if (!criteria.departureDate) missing.push("departure date");
+
+    return missing;
+}
+
+function formatMissingBookingCriteriaPrompt(missing: string[]) {
+    if (missing.length === 0) {
+        return "";
+    }
+
+    return `Please share the ${missing.join(", ")} so I can find eligible flights.`;
+}
+
+function normalizeDateText(value: string) {
+    return value
+        .toLowerCase()
+        .replace(/\bjanuary\b/g, "jan")
+        .replace(/\bfebruary\b/g, "feb")
+        .replace(/\bmarch\b/g, "mar")
+        .replace(/\bapril\b/g, "apr")
+        .replace(/\bjune\b/g, "jun")
+        .replace(/\bjuly\b/g, "jul")
+        .replace(/\baugust\b/g, "aug")
+        .replace(/\bseptember\b/g, "sep")
+        .replace(/\boctober\b/g, "oct")
+        .replace(/\bnovember\b/g, "nov")
+        .replace(/\bdecember\b/g, "dec")
+        .replace(/[,]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function flightMatchesDepartureDate(flight: Flight, departureDate?: string) {
+    if (!departureDate || /\b(today|tomorrow)\b/i.test(departureDate)) {
+        return true;
+    }
+
+    return normalizeDateText(flight.dates).includes(normalizeDateText(departureDate));
+}
+
+const CABIN_RANK: Record<string, number> = {
+    "Economy": 0,
+    "Premium Economy": 1,
+    "Business": 2,
+    "First Class": 3,
+};
+
+function evaluateFlightPolicy(flight: Flight, policy: TravelPolicy | null): { notes: string[]; status: PolicyStatus } {
+    if (!policy) {
+        return { notes: [], status: "in-policy" };
+    }
+
+    const notes: string[] = [];
+    const priceCap = policy.max_flight_price;
+    const approvalCap = priceCap * (1 + policy.price_cap_percent / 100);
+    const allowedCabinRank = CABIN_RANK[policy.domestic_cabin] ?? 0;
+    const flightCabinRank = CABIN_RANK[flight.cabin] ?? 0;
+    const priceOver = flight.price > priceCap;
+    const priceWayOver = flight.price > approvalCap;
+    const cabinOver = flightCabinRank > allowedCabinRank;
+    const cabinWayOver = flightCabinRank > allowedCabinRank + 1;
+
+    if (priceWayOver) notes.push(`price exceeds $${approvalCap.toFixed(0)} approval limit`);
+    else if (priceOver) notes.push(`price exceeds $${priceCap} cap`);
+
+    if (cabinWayOver) notes.push(`${flight.cabin} is not allowed by ${policy.domestic_cabin} policy`);
+    else if (cabinOver) notes.push(`${flight.cabin} is above ${policy.domestic_cabin}`);
+
+    if (priceWayOver || cabinWayOver) return { notes, status: "out-of-policy" };
+    if (priceOver || cabinOver) return { notes, status: "approval-required" };
+
+    return { notes: [], status: "in-policy" };
+}
+
+function formatTravelPolicyAndFlights(policy: TravelPolicy | null, flights: SuggestedFlight[]) {
+    const policyText = policy
+        ? `Current travel policy: cabin up to ${policy.domestic_cabin}, max $${policy.max_flight_price}/ticket, ${policy.price_cap_percent}% over cap requires approval.`
+        : "No active travel policy is configured, so all flights are currently eligible.";
+    const eligibleFlights = flights.filter((flight) => flight.policyStatus !== "out-of-policy").slice(0, 5);
+
+    if (eligibleFlights.length === 0) {
+        return `${policyText}\n\nI could not find eligible flights to suggest right now.`;
+    }
+
+    const flightLines = eligibleFlights.map((flight, index) => (
+        `${index + 1}. ${flight.id}: ${flight.airline}, ${flight.from_city} to ${flight.to_city}, ${flight.cabin}, $${flight.price}, ${flight.duration}, ${flight.policyStatus}`
+    ));
+
+    return `${policyText}\n\nEligible flights:\n${flightLines.join("\n")}\n\nTell me the flight number or ID you want me to book.`;
+}
+
+function formatEligibleFlightList(flights: SuggestedFlight[]) {
+    const eligibleFlights = flights.filter((flight) => flight.policyStatus !== "out-of-policy").slice(0, 5);
+
+    if (eligibleFlights.length === 0) {
+        return "No matching flights are available right now.";
+    }
+
+    return eligibleFlights.map((flight, index) => (
+        `${index + 1}. ${flight.id}: ${flight.airline}, ${flight.from_city} to ${flight.to_city}, ${flight.cabin}, $${flight.price}, ${flight.duration}, ${flight.policyStatus}`
+    )).join("\n");
+}
+
+function resolveRequestedFlightId(messages: ChatMessage[], suggestedFlights: SuggestedFlight[]) {
+    const latestMessage = messages[messages.length - 1]?.content || "";
+    const explicitId = latestMessage.match(/\bflight-[a-z0-9-]+\b/i)?.[0];
+
+    if (explicitId) {
+        if (suggestedFlights.length === 0 || suggestedFlights.some((flight) => flight.id === explicitId)) {
+            return explicitId;
+        }
+
+        return undefined;
+    }
+
+    const ordinalMatch = latestMessage.match(/\b(?:option|flight|number)?\s*(\d{1,2})(?:st|nd|rd|th)?\b/i);
+    const ordinal = ordinalMatch ? Number(ordinalMatch[1]) : NaN;
+
+    if (Number.isInteger(ordinal) && ordinal >= 1 && ordinal <= suggestedFlights.length) {
+        return suggestedFlights[ordinal - 1]?.id;
+    }
+
+    if (/\b(first|cheapest|lowest)\b/i.test(latestMessage)) {
+        return suggestedFlights[0]?.id;
+    }
+
+    return undefined;
+}
+
+function inferOrganizationName(messages: ChatMessage[]) {
+    const latestMessage = messages[messages.length - 1]?.content.trim() || "";
+    const explicitMatch = latestMessage.match(/\b(?:org(?:anization)?|company|tenant)\s*(?:name\s*)?(?:is|=|:)\s*([^,.]+)$/i);
+
+    if (explicitMatch?.[1]) {
+        return explicitMatch[1].trim();
+    }
+
+    const previousMessage = messages[messages.length - 2]?.content.toLowerCase() || "";
+    const latestLooksLikeName = /^[a-z0-9][a-z0-9 _-]{1,64}$/i.test(latestMessage);
+
+    if (latestLooksLikeName && previousMessage.includes("organization")) {
+        return latestMessage;
+    }
+
+    return undefined;
+}
+
+const pendingDelegations = new Map<string, PendingDelegation>();
+
+function buildOboAuthorizeUrl(state: string, request: ParsedChatRequest) {
+    const params = new URLSearchParams({
+        client_id: asgardeoConfig.clientId,
+        redirect_uri: oboRedirectUri,
+        requested_actor: agentConfig.agentID,
+        response_type: "code",
+        scope: delegatedBookingScopes,
+        state,
+    });
+
+    if (oboResource) {
+        params.set("resource", oboResource);
+    }
+
+    if (request.orgName) {
+        params.set("org", request.orgName);
+    }
+
+    if (request.orgId) {
+        params.set("orgId", request.orgId);
+    }
+
+    params.set("fidp", "OrganizationSSO");
+
+    return `${asgardeoConfig.baseUrl}/oauth2/authorize?${params.toString()}`;
+}
+
+async function exchangeOboAuthorizationCode(code: string, agentActorToken: string) {
+    logger.info("Exchanging OBO authorization code for delegated access token");
+
+    const response = await fetch(`${asgardeoConfig.baseUrl}/oauth2/token`, {
+        body: new URLSearchParams({
+            actor_token: agentActorToken,
+            client_id: asgardeoConfig.clientId,
+            client_secret: asgardeoConfig.clientSecret,
+            code,
+            grant_type: "authorization_code",
+            redirect_uri: oboRedirectUri,
+        }),
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method: "POST",
+        signal: AbortSignal.timeout(30000),
+    });
+
+    logger.info({ statusCode: response.status }, "OBO token exchange response received");
+
+    const body = await response.json().catch(() => ({})) as {
+        access_token?: string;
+        error?: string;
+        error_description?: string;
+    };
+
+    if (!response.ok || !body.access_token) {
+        throw new Error(body.error_description ?? body.error ?? "Failed to exchange the OBO authorization code.");
+    }
+
+    return body.access_token;
 }
 
 function createWebSocketAcceptKey(key: string): string {
@@ -569,7 +1128,72 @@ function writeHttpJson(response: ServerResponse, statusCode: number, body: Recor
     response.end(JSON.stringify(body));
 }
 
-async function createAgent() {
+function writeHttpHtml(response: ServerResponse, statusCode: number, body: string) {
+    response.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
+    response.end(body);
+}
+
+async function createMcpAgent(authorization: string, mode: ChatInvocationMode): Promise<AgentRuntime> {
+    const client = new MultiServerMCPClient({
+        travel: {
+            transport: "http",
+            url: process.env.MCP_SERVER_URL || "http://localhost:8001/mcp",
+            headers: {
+                Authorization: authorization,
+            },
+        },
+    });
+
+    const tools = sanitizeToolSchemasForGemini(await client.getTools());
+    logger.info({
+        mode,
+        tools: tools.map((tool) => tool.name).filter(Boolean),
+    }, "Loaded MCP tools");
+
+    const agent = createReactAgent({
+        llm: model,
+        tools: tools,
+        prompt: agentPrompt,
+    }) as RunnableAgent;
+
+    return { agent, client, tools };
+}
+
+async function getAutonomousAgentOrganizationToken(rootAgentToken: string, organizationId: string) {
+    logger.info({
+        switchingOrganizationId: organizationId,
+        scopes: autonomousTravelPolicyScopes,
+    }, "Exchanging autonomous agent token for organization token");
+
+    return exchangeOrganizationToken({
+        scopes: autonomousTravelPolicyScopes,
+        switchingOrganizationId: organizationId,
+        token: rootAgentToken,
+    });
+}
+
+async function getDelegatedUserOrganizationToken(accessToken: string, orgId?: string, scopes = delegatedUserOrganizationScopes) {
+    if (!orgId) {
+        return accessToken;
+    }
+
+    if (getTokenOrganizationId(accessToken) === orgId) {
+        return accessToken;
+    }
+
+    logger.info({
+        switchingOrganizationId: orgId,
+        scopes,
+    }, "Exchanging delegated user token for organization token");
+
+    return exchangeOrganizationToken({
+        scopes,
+        switchingOrganizationId: orgId,
+        token: accessToken,
+    });
+}
+
+async function createRootAgentRuntime(): Promise<RootAgentRuntime> {
     logger.info("Starting Wayfinder Enterprise AI agent with Asgardeo and LangChain");
     validateAgentConfiguration();
     logger.info({
@@ -583,34 +1207,247 @@ async function createAgent() {
     includeClientSecretInAgentAuthorizeRequest(asgardeoJavaScriptClient);
     const agentToken = await asgardeoJavaScriptClient.getAgentToken(agentConfig);
 
-    const client = new MultiServerMCPClient({
-        travel: {
-            transport: "http",
-            url: process.env.MCP_SERVER_URL || "http://localhost:8001/mcp",
-            headers: {
-                Authorization: `Bearer ${agentToken.accessToken}`,
-            },
-        },
-    });
+    return {
+        agentActorToken: agentToken.accessToken,
+    };
+}
 
-    const tools = sanitizeToolSchemasForGemini(await client.getTools());
+async function createAutonomousAgentRuntime(rootRuntime: RootAgentRuntime, organizationId: string) {
+    const organizationAccessToken = await getAutonomousAgentOrganizationToken(rootRuntime.agentActorToken, organizationId);
+
+    return createMcpAgent(`Bearer ${organizationAccessToken}`, "agent");
+}
+
+async function getTravelPolicyAndEligibleFlights(
+    rootRuntime: RootAgentRuntime,
+    organizationId: string,
+    criteria: BookingSearchCriteria = {}
+) {
+    const organizationAccessToken = await getAutonomousAgentOrganizationToken(rootRuntime.agentActorToken, organizationId);
+    const params = new URLSearchParams();
+
+    if (criteria.from) params.set("from", criteria.from);
+    if (criteria.to) params.set("to", criteria.to);
+
+    const flightsPath = `/api/flights${params.size > 0 ? `?${params.toString()}` : ""}`;
+    const [{ policy }, { flights }] = await Promise.all([
+        requestAppApi<{ policy: TravelPolicy | null }>("/api/travel-policies", organizationAccessToken),
+        requestAppApi<{ flights: Flight[] }>(flightsPath, organizationAccessToken),
+    ]);
+    const evaluatedFlights = flights
+        .filter((flight) => flightMatchesDepartureDate(flight, criteria.departureDate))
+        .map((flight) => {
+            const result = evaluateFlightPolicy(flight, policy);
+
+            return {
+                ...flight,
+                policyNotes: result.notes,
+                policyStatus: result.status,
+            };
+        })
+        .sort((left, right) => {
+            const statusRank: Record<PolicyStatus, number> = {
+                "in-policy": 0,
+                "approval-required": 1,
+                "out-of-policy": 2,
+            };
+
+            return statusRank[left.policyStatus] - statusRank[right.policyStatus] || left.price - right.price;
+        });
+
+    return {
+        flights: evaluatedFlights,
+        message: formatTravelPolicyAndFlights(policy, evaluatedFlights),
+        policy,
+    };
+}
+
+async function prefetchTravelPolicy(runtime: AgentRuntime): Promise<string | null> {
+    const tool = runtime.tools.find((candidate) => isToolNamed(candidate, "get_travel_policy"));
+
+    if (!tool?.invoke) {
+        logger.warn("get_travel_policy tool is not available for deterministic prefetch");
+
+        return null;
+    }
+
+    logger.info("Prefetching travel policy before delegated agent invocation");
+    const result = await tool.invoke({});
+    logger.info("Travel policy prefetch completed");
+
+    return getResponseContent(result);
+}
+
+async function invokeWithDelegatedUserAccess(request: ParsedChatRequest, delegatedAccessToken: string) {
     logger.info({
-        tools: tools.map((tool) => tool.name).filter(Boolean),
-    }, "Loaded MCP tools");
+        hasOrgId: Boolean(request.orgId),
+        messageCount: request.messages.length,
+    }, "Starting delegated user agent invocation");
 
-    const agent = createReactAgent({
-        llm: model,
-        tools: tools,
-        prompt: agentPrompt,
+    const accessToken = await getDelegatedUserOrganizationToken(delegatedAccessToken, request.orgId);
+    logger.info("Delegated organization access token is ready");
+
+    const runtime = await createMcpAgent(`Bearer ${accessToken}`, "user");
+    logger.info("Delegated MCP agent runtime is ready");
+
+    try {
+        let messages = request.messages;
+
+        if (shouldPrefetchTravelPolicy(request.messages)) {
+            const travelPolicy = await prefetchTravelPolicy(runtime);
+
+            if (travelPolicy) {
+                messages = addContextToFirstUserMessage(
+                    request.messages,
+                    `The active organization travel policy was already retrieved for this turn. Use this policy context before evaluating or booking flights:\n${travelPolicy}`
+                );
+            }
+        }
+
+        logger.info("Invoking delegated MCP agent");
+        const result = await withTimeout(
+            runtime.agent.invoke({ messages }),
+            60000,
+            "Delegated MCP agent invocation"
+        );
+        logger.info("Delegated MCP agent invocation completed");
+
+        return getResponseContent(result.messages.at(-1)?.content);
+    } finally {
+        await runtime.client.close();
+        logger.info("Delegated MCP client closed");
+    }
+}
+
+async function createBookingWithDelegatedUserAccess(pending: PendingDelegation, delegatedAccessToken: string) {
+    if (!pending.flightId) {
+        throw new Error("No flight was selected for booking.");
+    }
+
+    const accessToken = await getDelegatedUserOrganizationToken(
+        delegatedAccessToken,
+        pending.orgId,
+        delegatedBookingScopes
+    );
+    const bookingResponse = await requestAppApi<{ booking?: { booking_reference?: string } }>("/api/bookings", accessToken, {
+        body: JSON.stringify({
+            bookedByName: "AI-assisted user",
+            flightId: pending.flightId,
+            travelers: 1,
+        }),
+        method: "POST",
+    });
+    const reference = bookingResponse.booking?.booking_reference;
+
+    return reference
+        ? `Booked flight ${pending.flightId}. Booking reference: ${reference}.`
+        : `Booked flight ${pending.flightId}.`;
+}
+
+function registerPendingDelegation(socket: Duplex, request: ParsedChatRequest, flightId?: string) {
+    const state = randomUUID();
+
+    pendingDelegations.set(state, {
+        createdAt: Date.now(),
+        flightId,
+        orgId: request.orgId,
+        request,
+        socket,
     });
 
-    return { agent, client, tools };
+    return {
+        authorizationUrl: buildOboAuthorizeUrl(state, request),
+        state,
+    };
+}
+
+function removeExpiredPendingDelegations() {
+    const expiresBefore = Date.now() - 10 * 60 * 1000;
+
+    for (const [state, pending] of pendingDelegations) {
+        if (pending.createdAt < expiresBefore) {
+            pendingDelegations.delete(state);
+        }
+    }
+}
+
+async function handleOboCallback(url: URL, response: ServerResponse, agentActorToken?: string) {
+    removeExpiredPendingDelegations();
+
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const error = url.searchParams.get("error");
+    const errorDescription = url.searchParams.get("error_description");
+
+    if (error) {
+        writeHttpHtml(response, 400, `<p>Authorization failed: ${errorDescription || error}</p>`);
+        return;
+    }
+
+    if (!code || !state) {
+        writeHttpHtml(response, 400, "<p>Missing authorization code or state.</p>");
+        return;
+    }
+
+    if (!agentActorToken) {
+        writeHttpHtml(response, 500, "<p>The agent actor token is not available.</p>");
+        return;
+    }
+
+    const pending = pendingDelegations.get(state);
+
+    if (!pending) {
+        writeHttpHtml(response, 410, "<p>This authorization request has expired. Please retry the action from the chat.</p>");
+        return;
+    }
+
+    pendingDelegations.delete(state);
+    writeHttpHtml(response, 200, "<p>Authorization complete. You can close this tab and return to Wayfinder.</p>");
+
+    try {
+        logger.info({
+            hasPendingSocket: isSocketWritable(pending.socket),
+            messageCount: pending.request.messages.length,
+        }, "Completing delegated authorization callback");
+
+        const delegatedAccessToken = await exchangeOboAuthorizationCode(code, agentActorToken);
+        logger.info("Delegated access token received from OBO callback");
+
+        const responseMessage = pending.flightId
+            ? await createBookingWithDelegatedUserAccess(pending, delegatedAccessToken)
+            : await invokeWithDelegatedUserAccess(pending.request, delegatedAccessToken);
+        logger.info({
+            responseLength: responseMessage.length,
+            socketWritable: isSocketWritable(pending.socket),
+        }, "Sending delegated agent response over WebSocket");
+
+        const sent = sendJson(pending.socket, {
+            type: "response",
+            message: responseMessage,
+        });
+        logger.info({ sent }, "Delegated agent WebSocket response send completed");
+    } catch (callbackError) {
+        logger.error({ err: callbackError }, "Failed to complete delegated authorization callback");
+        sendJson(pending.socket, {
+            type: "error",
+            message: "I couldn't complete the authorization. Please try approving the action again.",
+        });
+    }
 }
 
 async function runAgentServer() {
-    const { agent, client, tools } = await createAgent();
+    const rootRuntime = await createRootAgentRuntime();
+    const autonomousRuntimePromises = new Map<string, Promise<AgentRuntime>>();
     const port = Number(process.env.PORT || process.env.AGENT_PORT || 8791);
     const host = process.env.HOST || "localhost";
+
+    const getAutonomousRuntime = (organizationId: string) => {
+        if (!autonomousRuntimePromises.has(organizationId)) {
+            autonomousRuntimePromises.set(organizationId, createAutonomousAgentRuntime(rootRuntime, organizationId));
+        }
+
+        return autonomousRuntimePromises.get(organizationId)!;
+    };
 
     const server = createServer(async (request, response) => {
         const requestId = randomUUID();
@@ -630,12 +1467,20 @@ async function runAgentServer() {
         });
         requestLogger.info("HTTP request started");
 
-        if (request.url === "/health") {
+        const url = new URL(request.url || "/", `http://${request.headers.host || host}`);
+
+        if (url.pathname === "/obo/callback") {
+            await handleOboCallback(url, response, rootRuntime.agentActorToken);
+
+            return;
+        }
+
+        if (url.pathname === "/health") {
             writeHttpJson(response, 200, {
                 status: "ok",
                 features: {
-            enterpriseTravelTools: true,
-            travelPolicyTool: tools.some((tool) => isToolNamed(tool, "get_travel_policy")),
+                    enterpriseTravelTools: true,
+                    autonomousOrganizationToken: autonomousRuntimePromises.size > 0 ? "initialized" : "lazy",
                 },
             });
 
@@ -645,10 +1490,11 @@ async function runAgentServer() {
         writeHttpJson(response, 404, { error: "Not found" });
     });
 
-    const handleConnection = (socket: Duplex) => {
+    const handleConnection = (socket: Duplex, authenticatedOrgId: string) => {
         const connectionId = randomUUID();
         const connectionLogger = logger.child({ connectionId });
         let isClosed = false;
+        let lastSuggestedFlights: SuggestedFlight[] = [];
 
         connectionLogger.info("WebSocket client connected");
 
@@ -701,10 +1547,20 @@ async function runAgentServer() {
                                 return;
                             }
 
-                            const messages = parseChatRequest(payload);
-                            const latestMessage = messages[messages.length - 1]?.content || "";
+                            const parsedChatRequest = parseChatRequest(payload);
+                            const chatRequest: ParsedChatRequest = {
+                                ...parsedChatRequest,
+                                orgId: authenticatedOrgId,
+                            };
+                            const llmMessages = addContextToFirstUserMessage(
+                                chatRequest.messages,
+                                `Authenticated organization ID for this chat: ${authenticatedOrgId}`
+                            );
+                            const mode = resolveInvocationMode(chatRequest);
+                            const latestMessage = chatRequest.messages[chatRequest.messages.length - 1]?.content || "";
                             const messageLogger = connectionLogger.child({
-                                messageCount: messages.length,
+                                mode,
+                                messageCount: chatRequest.messages.length,
                                 latestMessageLength: latestMessage.length,
                             });
 
@@ -714,9 +1570,72 @@ async function runAgentServer() {
                             }
 
                             messageLogger.info("Processing chat message");
-                            const responseMessage = getResponseContent(
-                                (await agent.invoke({ messages })).messages.at(-1)?.content
-                            );
+                            const responseMessage = mode === "user"
+                                ? await (async () => {
+                                    if (isBookingIntent(chatRequest.messages)) {
+                                        const flightId = resolveRequestedFlightId(chatRequest.messages, lastSuggestedFlights);
+
+                                        if (!flightId) {
+                                            const criteria = extractBookingSearchCriteria(chatRequest.messages);
+                                            const missingCriteria = getMissingBookingCriteria(criteria);
+
+                                            if (missingCriteria.length > 0) {
+                                                sendJson(socket, {
+                                                    type: "response",
+                                                    message: formatMissingBookingCriteriaPrompt(missingCriteria),
+                                                });
+
+                                                return "";
+                                            }
+
+                                            const result = await getTravelPolicyAndEligibleFlights(rootRuntime, authenticatedOrgId, criteria);
+                                            lastSuggestedFlights = result.flights.filter((flight) => flight.policyStatus !== "out-of-policy");
+
+                                            sendJson(socket, {
+                                                type: "response",
+                                                message: formatEligibleFlightList(result.flights),
+                                            });
+
+                                            return "";
+                                        }
+
+                                        const delegation = registerPendingDelegation(socket, chatRequest, flightId);
+
+                                        sendJson(socket, {
+                                            type: "authorization_required",
+                                            authorizationUrl: delegation.authorizationUrl,
+                                            message: `Please approve booking flight ${flightId}. I opened the authorization page in a new tab.`,
+                                        });
+
+                                        return "";
+                                    }
+
+                                    sendJson(socket, {
+                                        type: "response",
+                                        message: "For this demo I can show travel policy and eligible flights, then book a selected flight after your authorization.",
+                                    });
+
+                                    return "";
+                                })()
+                                : await (async () => {
+                                    if (isTravelPolicyIntent(chatRequest.messages)) {
+                                        const result = await getTravelPolicyAndEligibleFlights(rootRuntime, authenticatedOrgId);
+
+                                        lastSuggestedFlights = result.flights.filter((flight) => flight.policyStatus !== "out-of-policy");
+
+                                        return result.message;
+                                    }
+
+                                    const autonomousRuntime = await getAutonomousRuntime(authenticatedOrgId);
+
+                                    return getResponseContent(
+                                        (await autonomousRuntime.agent.invoke({ messages: llmMessages })).messages.at(-1)?.content
+                                    );
+                                })();
+
+                            if (mode === "user") {
+                                return;
+                            }
 
                             if (isClosed) {
                                 return;
@@ -771,11 +1690,25 @@ async function runAgentServer() {
                 return;
             }
 
+            const callerToken = getBearerToken(request.headers.authorization)
+                || getWebSocketProtocolToken(request.headers["sec-websocket-protocol"]);
+            const authenticatedOrgId = getTokenOrganizationId(callerToken);
+
+            if (!callerToken || !authenticatedOrgId) {
+                if (!socket.destroyed && !socket.writableEnded) {
+                    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+                }
+                socket.destroy();
+
+                return;
+            }
+
             writeFrame(socket, Buffer.from([
                 "HTTP/1.1 101 Switching Protocols",
                 "Upgrade: websocket",
                 "Connection: Upgrade",
                 `Sec-WebSocket-Accept: ${createWebSocketAcceptKey(key)}`,
+                "Sec-WebSocket-Protocol: bearer",
                 "",
                 "",
             ].join("\r\n")));
@@ -784,7 +1717,7 @@ async function runAgentServer() {
                 socket.unshift(head);
             }
 
-            handleConnection(socket);
+            handleConnection(socket, authenticatedOrgId);
         } catch (error) {
             logger.error({ err: error }, "Error upgrading WebSocket connection");
             socket.destroy();
@@ -801,7 +1734,10 @@ async function runAgentServer() {
     const shutdown = async () => {
         logger.info("Shutting down AI agent");
         server.close();
-        await client.close();
+        for (const autonomousRuntimePromise of autonomousRuntimePromises.values()) {
+            const autonomousRuntime = await autonomousRuntimePromise;
+            await autonomousRuntime.client.close();
+        }
         process.exit(0);
     };
 

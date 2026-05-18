@@ -3,6 +3,9 @@ import { requireScope } from "../../../lib/auth/guard";
 import { Scope } from "../../../lib/auth/utils";
 import { getEnterpriseIdp, upsertEnterpriseIdp, deleteEnterpriseIdp } from "../../../lib/db/queries/enterprise-idp";
 import { idpCreate, idpGet, idpUpdate, idpDelete, appGetIdByName, appAddIdpToAuthSequence, appRemoveIdpFromAuthSequence, type IdpConfig } from "../../../lib/asgardeo/client";
+import { logger } from "../../../lib/logging/logger";
+
+const routeLogger = logger.child({ route: "organization/enterprise-idp" });
 
 export async function GET(request: NextRequest) {
   const auth = await requireScope(request, [Scope.IDP_VIEW]);
@@ -21,6 +24,7 @@ export async function GET(request: NextRequest) {
     const idp = await idpGet(accessToken, record.idp_id);
     return NextResponse.json({ idp });
   } catch (err) {
+    routeLogger.error({ err, idpId: record.idp_id, orgId }, "Failed to fetch identity provider");
     const message = err instanceof Error ? err.message : "Failed to fetch identity provider.";
     return NextResponse.json({ error: message }, { status: 502 });
   }
@@ -84,6 +88,7 @@ export async function POST(request: NextRequest) {
     upsertEnterpriseIdp(orgId, idp.id, idp.name);
     return NextResponse.json({ idp }, { status: 201 });
   } catch (err) {
+    routeLogger.error({ err, orgId }, "Failed to create identity provider");
     const message = err instanceof Error ? err.message : "Failed to create identity provider.";
     return NextResponse.json({ error: message }, { status: 502 });
   }
@@ -114,6 +119,7 @@ export async function PUT(request: NextRequest) {
     upsertEnterpriseIdp(orgId, idp.id, idp.name);
     return NextResponse.json({ idp });
   } catch (err) {
+    routeLogger.error({ err, idpId: record.idp_id, orgId }, "Failed to update identity provider");
     const message = err instanceof Error ? err.message : "Failed to update identity provider.";
     return NextResponse.json({ error: message }, { status: 502 });
   }
@@ -145,6 +151,7 @@ export async function DELETE(request: NextRequest) {
     deleteEnterpriseIdp(orgId);
     return new NextResponse(null, { status: 204 });
   } catch (err) {
+    routeLogger.error({ err, idpId: record.idp_id, orgId }, "Failed to delete identity provider");
     const message = err instanceof Error ? err.message : "Failed to delete identity provider.";
     return NextResponse.json({ error: message }, { status: 502 });
   }

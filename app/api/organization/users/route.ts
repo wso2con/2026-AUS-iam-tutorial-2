@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireScope } from "../../../lib/auth/guard";
 import { Scope, USER_ROLE_TO_ASGARDEO_ROLE, UserRole } from "../../../lib/auth/utils";
 import { scimAssignRoleToUser, scimCreateUser, scimFetchRoleIdByName, scimListUsers } from "../../../lib/asgardeo/client";
+import { logger } from "../../../lib/logging/logger";
+
+const routeLogger = logger.child({ route: "organization/users" });
 
 type InviteRequest = {
   email?: string;
@@ -20,11 +23,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const accessToken = request.headers.get("authorization")!.slice(7);
-    const { users } = await scimListUsers(accessToken);
+    const { users, totalResults } = await scimListUsers(accessToken);
 
-    const localUsers = users.filter((u) => !u["urn:scim:wso2:schema"]?.managedOrg);
-
-    const mapped = localUsers.map((u) => {
+    const mapped = users.map((u) => {
       const rawEmail = u.emails?.[0];
       const email =
         typeof rawEmail === "string" ? rawEmail :
@@ -38,9 +39,9 @@ export async function GET(request: NextRequest) {
       return { id: u.id, userName: u.userName, email, name, status };
     });
 
-    return NextResponse.json({ users: mapped, totalResults: mapped.length });
+    return NextResponse.json({ users: mapped, totalResults });
   } catch (error) {
-    console.error("[organization/users] Failed to list users.", error);
+    routeLogger.error({ err: error }, "Failed to list users");
     return NextResponse.json({ message: "Failed to fetch users." }, { status: 500 });
   }
 }
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (error) {
-    console.error("[organization/users] Failed to invite user.", error);
+    routeLogger.error({ err: error }, "Failed to invite user");
     return NextResponse.json({ message: "We couldn't send the invitation. Please try again." }, { status: 500 });
   }
 }

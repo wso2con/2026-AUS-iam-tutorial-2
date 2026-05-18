@@ -1,3 +1,7 @@
+import { logger } from "../logging/logger";
+
+const clientLogger = logger.child({ component: "asgardeo/client" });
+
 const getBaseUrl = () => (process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "").replace(/\/$/, "");
 const getUserStoreName = () => process.env.ASGARDEO_USER_STORE_NAME ?? "DEFAULT";
 
@@ -6,7 +10,7 @@ export interface ScimUser {
   userName: string;
   name?: { givenName?: string; familyName?: string };
   emails?: string[] | Array<{ value: string; primary?: boolean }>;
-  "urn:scim:wso2:schema"?: { accountLocked?: string; managedOrg?: string };
+  "urn:scim:wso2:schema"?: { accountLocked?: string };
 }
 
 export interface ScimRole {
@@ -47,7 +51,7 @@ export async function scimCreateUser(
       typeof json?.Errors?.[0]?.description === "string" ? json.Errors[0].description :
       typeof json?.message === "string" ? json.message :
       "Failed to create user.";
-    console.error("[asgardeo/client] scimCreateUser failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "scimCreateUser failed");
     throw new Error(message);
   }
 
@@ -95,7 +99,7 @@ export async function scimListUsers(
       typeof json?.detail === "string" ? json.detail :
       typeof json?.message === "string" ? json.message :
       "Failed to fetch users.";
-    console.error("[asgardeo/client] scimListUsers failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "scimListUsers failed");
     throw new Error(message);
   }
 
@@ -120,7 +124,7 @@ export async function scimSendPasswordResetLink(accessToken: string, userId: str
   if (!response.ok) {
     const json = await response.json().catch(() => null);
     const message = typeof json?.detail === "string" ? json.detail : "Failed to send password reset link.";
-    console.error("[asgardeo/client] scimSendPasswordResetLink failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "scimSendPasswordResetLink failed");
     throw new Error(message);
   }
 }
@@ -142,7 +146,7 @@ export async function scimUpdateAccountLocked(accessToken: string, userId: strin
   if (!response.ok) {
     const json = await response.json().catch(() => null);
     const message = typeof json?.detail === "string" ? json.detail : `Failed to ${locked ? "lock" : "unlock"} account.`;
-    console.error("[asgardeo/client] scimUpdateAccountLocked failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "scimUpdateAccountLocked failed");
     throw new Error(message);
   }
 }
@@ -169,7 +173,7 @@ export async function scimListRolesWithUsers(accessToken: string): Promise<ScimR
       typeof json?.detail === "string" ? json.detail :
       typeof json?.message === "string" ? json.message :
       "Failed to fetch roles.";
-    console.error("[asgardeo/client] scimListRolesWithUsers failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "scimListRolesWithUsers failed");
     throw new Error(message);
   }
 
@@ -192,7 +196,7 @@ export async function scimGetRoleById(accessToken: string, roleId: string): Prom
       typeof json?.detail === "string" ? json.detail :
       typeof json?.message === "string" ? json.message :
       `Failed to fetch role ${roleId}.`;
-    console.error("[asgardeo/client] scimGetRoleById failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "scimGetRoleById failed");
     throw new Error(message);
   }
 
@@ -228,7 +232,7 @@ export async function scimUpdateRoleUsers(
   if (!response.ok) {
     const json = await response.json().catch(() => null);
     const message = typeof json?.detail === "string" ? json.detail : "Failed to update role users.";
-    console.error("[asgardeo/client] scimUpdateRoleUsers failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "scimUpdateRoleUsers failed");
     throw new Error(message);
   }
 }
@@ -341,7 +345,7 @@ export async function idpCreate(accessToken: string, config: IdpConfig): Promise
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to create identity provider.";
-    console.error("[asgardeo/client] idpCreate failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "idpCreate failed");
     throw new Error(message);
   }
 
@@ -367,7 +371,7 @@ export async function idpGet(accessToken: string, idpId: string): Promise<IdpDet
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to fetch identity provider.";
-    console.error("[asgardeo/client] idpGet failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "idpGet failed");
     throw new Error(message);
   }
 
@@ -413,7 +417,7 @@ export async function idpUpdate(accessToken: string, idpId: string, config: IdpC
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to update identity provider.";
-    console.error("[asgardeo/client] idpUpdate PATCH failed:", patchRes.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: patchRes.status }, "idpUpdate PATCH failed");
     throw new Error(message);
   }
 
@@ -444,7 +448,7 @@ export async function idpUpdate(accessToken: string, idpId: string, config: IdpC
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to update identity provider authenticator.";
-    console.error("[asgardeo/client] idpUpdate PUT authenticator failed:", authRes.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: authRes.status }, "idpUpdate PUT authenticator failed");
     throw new Error(message);
   }
 
@@ -465,7 +469,7 @@ export async function idpDelete(accessToken: string, idpId: string): Promise<voi
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to delete identity provider.";
-    console.error("[asgardeo/client] idpDelete failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "idpDelete failed");
     throw new Error(message);
   }
 }
@@ -508,7 +512,7 @@ export async function shareApplicationRoles(
       typeof json?.message === "string" ? json.message :
       typeof json?.description === "string" ? json.description :
       "Failed to share application roles.";
-    console.error("[asgardeo/client] shareApplicationRoles failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "shareApplicationRoles failed");
     throw new Error(message);
   }
 
@@ -556,7 +560,7 @@ export async function removeApplicationRoles(
       typeof json?.message === "string" ? json.message :
       typeof json?.description === "string" ? json.description :
       "Failed to remove application roles.";
-    console.error("[asgardeo/client] removeApplicationRoles failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "removeApplicationRoles failed");
     throw new Error(message);
   }
 
@@ -583,7 +587,7 @@ export async function appGetIdByName(accessToken: string, appName: string): Prom
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to fetch applications.";
-    console.error("[asgardeo/client] appGetIdByName failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "appGetIdByName failed");
     throw new Error(message);
   }
 
@@ -625,7 +629,7 @@ export async function appAddIdpToAuthSequence(accessToken: string, appId: string
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to update application authentication sequence.";
-    console.error("[asgardeo/client] appAddIdpToAuthSequence failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "appAddIdpToAuthSequence failed");
     throw new Error(message);
   }
 }
@@ -662,7 +666,7 @@ export async function appRemoveIdpFromAuthSequence(accessToken: string, appId: s
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to update application authentication sequence.";
-    console.error("[asgardeo/client] appRemoveIdpFromAuthSequence failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "appRemoveIdpFromAuthSequence failed");
     throw new Error(message);
   }
 }
@@ -815,7 +819,7 @@ export async function brandingGet(accessToken: string): Promise<BrandingConfig |
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to fetch branding preference.";
-    console.error("[asgardeo/client] brandingGet failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "brandingGet failed");
     throw new Error(message);
   }
 
@@ -837,14 +841,14 @@ export async function brandingCreate(
     body: JSON.stringify(buildBrandingPayload(orgId, config)),
   });
   
-  console.log(response);
+  clientLogger.debug({ statusCode: response.status }, "brandingCreate response received");
   if (!response.ok) {
     const json = await response.json().catch(() => ({})) as Record<string, unknown>;
     const message =
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to create branding preference.";
-    console.error("[asgardeo/client] brandingCreate failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "brandingCreate failed");
     throw new Error(message);
   }
 }
@@ -870,7 +874,7 @@ export async function brandingUpdate(
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to update branding preference.";
-    console.error("[asgardeo/client] brandingUpdate failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "brandingUpdate failed");
     throw new Error(message);
   }
 }
@@ -891,7 +895,7 @@ export async function brandingDelete(accessToken: string, orgId: string): Promis
       typeof json?.description === "string" ? json.description :
       typeof json?.message === "string" ? json.message :
       "Failed to delete branding preference.";
-    console.error("[asgardeo/client] brandingDelete failed:", response.status, JSON.stringify(json));
+    clientLogger.error({ responseBody: json, statusCode: response.status }, "brandingDelete failed");
     throw new Error(message);
   }
 }

@@ -1,18 +1,21 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useAuth } from "./lib/auth/client";
 
 type ChatRole = "user" | "assistant" | "system";
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 interface ChatMessage {
+  authorizationUrl?: string;
   id: string;
   role: ChatRole | "error";
   content: string;
 }
 
 interface AgentPayload {
-  type?: "ready" | "processing" | "response" | "error";
+  authorizationUrl?: string;
+  type?: "ready" | "processing" | "response" | "error" | "authorization_required";
   message?: string;
 }
 
@@ -52,7 +55,172 @@ function AgentLauncherIcon() {
   );
 }
 
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+
+    if (match[2] && match[3]) {
+      parts.push(
+        <a href={match[3]} key={`link-${match.index}`} rel="noreferrer" target="_blank">
+          {match[2]}
+        </a>
+      );
+    } else if (match[4]) {
+      parts.push(<code key={`code-${match.index}`}>{match[4]}</code>);
+    } else if (match[5]) {
+      parts.push(<strong key={`strong-${match.index}`}>{match[5]}</strong>);
+    } else if (match[6]) {
+      parts.push(<em key={`em-${match.index}`}>{match[6]}</em>);
+    }
+
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts;
+}
+
+function parseTableRow(line: string): string[] | null {
+  const trimmed = line.trim();
+
+  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) {
+    return null;
+  }
+
+  const cells = trimmed.slice(1, -1).split("|").map((cell) => cell.trim());
+  const isSeparator = cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+
+  return isSeparator ? [] : cells;
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  const lines = content.split(/\r?\n/);
+  const blocks: ReactNode[] = [];
+  let paragraph: string[] = [];
+  let listItems: string[] = [];
+  let listOrdered = false;
+  let tableRows: string[][] = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    blocks.push(
+      <p key={`p-${blocks.length}`}>
+        {renderInlineMarkdown(paragraph.join(" "))}
+      </p>
+    );
+    paragraph = [];
+  };
+
+  const flushList = () => {
+    if (listItems.length === 0) return;
+    const ListTag = listOrdered ? "ol" : "ul";
+    blocks.push(
+      <ListTag key={`list-${blocks.length}`}>
+        {listItems.map((item, index) => (
+          <li key={`${item}-${index}`}>{renderInlineMarkdown(item)}</li>
+        ))}
+      </ListTag>
+    );
+    listItems = [];
+  };
+
+  const flushTable = () => {
+    if (tableRows.length === 0) return;
+    const [header, ...rows] = tableRows;
+    blocks.push(
+      <div className="agent-chat-table-wrap" key={`table-${blocks.length}`}>
+        <table>
+          <thead>
+            <tr>
+              {header.map((cell, index) => (
+                <th key={`${cell}-${index}`}>{renderInlineMarkdown(cell)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={`row-${rowIndex}`}>
+                {row.map((cell, cellIndex) => (
+                  <td key={`${cell}-${cellIndex}`}>{renderInlineMarkdown(cell)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+    tableRows = [];
+  };
+
+  const flushAll = () => {
+    flushParagraph();
+    flushList();
+    flushTable();
+  };
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    const tableCells = parseTableRow(trimmed);
+
+    if (!trimmed) {
+      flushAll();
+      return;
+    }
+
+    if (tableCells) {
+      flushParagraph();
+      flushList();
+      if (tableCells.length > 0) tableRows.push(tableCells);
+      return;
+    }
+
+    flushTable();
+
+    const headingMatch = trimmed.match(/^#{1,3}\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      blocks.push(
+        <h3 key={`h-${blocks.length}`}>
+          {renderInlineMarkdown(headingMatch[1])}
+        </h3>
+      );
+      return;
+    }
+
+    const unorderedMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    const orderedMatch = trimmed.match(/^\d+[.)]\s+(.+)$/);
+
+    if (unorderedMatch || orderedMatch) {
+      flushParagraph();
+      const nextOrdered = Boolean(orderedMatch);
+      if (listItems.length > 0 && listOrdered !== nextOrdered) flushList();
+      listOrdered = nextOrdered;
+      listItems.push((orderedMatch || unorderedMatch)?.[1] ?? "");
+      return;
+    }
+
+    flushList();
+    paragraph.push(trimmed);
+  });
+
+  flushAll();
+
+  return <div className="agent-chat-markdown">{blocks}</div>;
+}
+
 export default function AgentChatWidget() {
+  const { accessToken, isSignedIn, user } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -61,6 +229,7 @@ export default function AgentChatWidget() {
     createMessage("assistant", "Hi, I can help with enterprise travel policies, users, roles, and compliant fares."),
   ]);
   const socketRef = useRef<WebSocket | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const statusLabel = useMemo(() => {
@@ -70,12 +239,12 @@ export default function AgentChatWidget() {
   }, [connectionStatus]);
 
   useEffect(() => {
-    if (!isOpen) {
+    if (!isOpen || !accessToken) {
       return;
     }
 
     setConnectionStatus("connecting");
-    const socket = new WebSocket(AGENT_CHAT_URL);
+    const socket = new WebSocket(AGENT_CHAT_URL, ["bearer", accessToken]);
     socketRef.current = socket;
 
     socket.addEventListener("open", () => {
@@ -110,6 +279,18 @@ export default function AgentChatWidget() {
           createMessage("error", payload.message || "The assistant could not process that request."),
         ]);
       }
+
+      if (payload.type === "authorization_required" && payload.authorizationUrl) {
+        window.open(payload.authorizationUrl, "_blank", "noopener,noreferrer");
+        setIsProcessing(false);
+        setMessages((current) => [
+          ...current,
+          {
+            ...createMessage("assistant", payload.message || "Please approve this action to continue."),
+            authorizationUrl: payload.authorizationUrl,
+          },
+        ]);
+      }
     });
 
     socket.addEventListener("close", () => {
@@ -131,11 +312,17 @@ export default function AgentChatWidget() {
         socketRef.current = null;
       }
     };
-  }, [isOpen]);
+  }, [accessToken, isOpen]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end" });
   }, [messages, isProcessing, isOpen]);
+
+  useEffect(() => {
+    if (isOpen && !isProcessing) {
+      inputRef.current?.focus();
+    }
+  }, [isOpen, isProcessing]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -143,7 +330,15 @@ export default function AgentChatWidget() {
     const content = input.trim();
     const socket = socketRef.current;
 
-    if (!content || isProcessing || !socket || socket.readyState !== WebSocket.OPEN) {
+    if (!content || isProcessing) {
+      return;
+    }
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setMessages((current) => [
+        ...current,
+        createMessage("error", "The AI agent is offline. Start the agent server and try again."),
+      ]);
       return;
     }
 
@@ -153,7 +348,14 @@ export default function AgentChatWidget() {
     setMessages(nextMessages);
     setInput("");
     setIsProcessing(true);
-    socket.send(JSON.stringify({ messages: toAgentMessages(nextMessages) }));
+    socket.send(JSON.stringify({
+      messages: toAgentMessages(nextMessages),
+      orgName: user?.orgName || undefined,
+    }));
+  }
+
+  if (!isSignedIn || !accessToken) {
+    return null;
   }
 
   return (
@@ -183,7 +385,17 @@ export default function AgentChatWidget() {
           <div className="agent-chat-messages" role="log" aria-live="polite">
             {messages.map((message) => (
               <div className={`agent-chat-message agent-chat-message--${message.role}`} key={message.id}>
-                {message.content}
+                <MarkdownMessage content={message.content} />
+                {message.authorizationUrl ? (
+                  <a
+                    className="agent-chat-authorization-link"
+                    href={message.authorizationUrl}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Authorize action
+                  </a>
+                ) : null}
               </div>
             ))}
             {isProcessing && (
@@ -198,16 +410,19 @@ export default function AgentChatWidget() {
             <label className="agent-chat-input-label">
               <span>Message</span>
               <input
+                ref={inputRef}
+                autoComplete="off"
+                type="text"
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 placeholder="Ask about policies, users, roles, or fares"
-                disabled={connectionStatus !== "connected" || isProcessing}
+                disabled={isProcessing}
               />
             </label>
             <button
               className="agent-chat-send-button"
               type="submit"
-              disabled={connectionStatus !== "connected" || isProcessing || !input.trim()}
+              disabled={isProcessing || !input.trim()}
             >
               Send
             </button>

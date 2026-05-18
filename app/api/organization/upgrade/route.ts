@@ -3,6 +3,9 @@ import { requireScope } from "../../../lib/auth/guard";
 import { Scope, Tier } from "../../../lib/auth/utils";
 import { getOrgTier, upsertOrgTier } from "../../../lib/db/queries/org-tiers";
 import { shareApplicationRoles, removeApplicationRoles, scimFetchRoleIdByName, scimAssignRoleToUser } from "../../../lib/asgardeo/client";
+import { logger } from "../../../lib/logging/logger";
+
+const routeLogger = logger.child({ route: "organization/upgrade" });
 
 const baseUrl = (process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "").replace(/\/$/, "");
 const clientId = process.env.ASGARDEO_CLIENT_ID ?? process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID ?? "";
@@ -31,7 +34,7 @@ async function assignRolesToAdmin(accessToken: string, adminId: string, roles: s
       if (roleId) {
         await scimAssignRoleToUser(accessToken, roleId, adminId);
       } else {
-        console.warn(`[upgrade] Role "${roleName}" not found in org — skipping assignment.`);
+        routeLogger.warn({ roleName }, "Role not found in organization; skipping assignment");
       }
     })
   );
@@ -92,14 +95,14 @@ export async function POST(request: NextRequest) {
         await shareApplicationRoles(rootToken, orgId, roles, applicationId, appDisplayName);
       }
     } catch (err) {
-      console.error("[upgrade] Application role sharing failed:", err);
+      routeLogger.error({ err, orgId, tier }, "Application role sharing failed");
       return NextResponse.json(
         { error: "Upgrade failed. Please check your configuration and try again." },
         { status: 500 }
       );
     }
   } else {
-    console.warn("[upgrade] ASGARDEO_APP_ID not configured — skipping application role sharing.");
+    routeLogger.warn("ASGARDEO_APP_ID is not configured; skipping application role sharing");
   }
 
   if (adminId && roles.length > 0) {
@@ -107,7 +110,7 @@ export async function POST(request: NextRequest) {
     try {
       await assignRolesToAdmin(accessToken, adminId, roles);
     } catch (err) {
-      console.error("[upgrade] Admin role assignment failed:", err);
+      routeLogger.error({ err, adminId, orgId, tier }, "Admin role assignment failed");
     }
   }
 
@@ -142,7 +145,7 @@ export async function PUT(request: NextRequest) {
         await shareApplicationRoles(rootToken, orgId, roles, applicationId, appDisplayName);
       }
     } catch (err) {
-      console.error("[upgrade] Application role sharing failed:", err);
+      routeLogger.error({ err, orgId, tier }, "Application role sharing failed");
       return NextResponse.json(
         { error: "Upgrade failed. Please check your configuration and try again." },
         { status: 500 }
@@ -155,7 +158,7 @@ export async function PUT(request: NextRequest) {
     try {
       await assignRolesToAdmin(accessToken, adminId, roles);
     } catch (err) {
-      console.error("[upgrade] Admin role assignment failed:", err);
+      routeLogger.error({ err, adminId, orgId, tier }, "Admin role assignment failed");
     }
   }
 
@@ -176,14 +179,14 @@ export async function DELETE(request: NextRequest) {
       const allRoles = [basicBrandingEditorRole, advancedBrandingEditorRole, idpManagerRole];
       await removeApplicationRoles(rootToken, orgId, allRoles, applicationId, appDisplayName);
     } catch (err) {
-      console.error("[upgrade] Application role removal failed:", err);
+      routeLogger.error({ err, orgId }, "Application role removal failed");
       return NextResponse.json(
         { error: "Downgrade failed. Please check your configuration and try again." },
         { status: 500 }
       );
     }
   } else {
-    console.warn("[upgrade] ASGARDEO_APP_ID not configured — skipping application role removal.");
+    routeLogger.warn("ASGARDEO_APP_ID is not configured; skipping application role removal");
   }
 
   upsertOrgTier(orgId, Tier.FREE);

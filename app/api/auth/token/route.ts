@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { logger } from "../../../lib/logging/logger";
+
+const routeLogger = logger.child({ route: "auth/token" });
 
 type TokenResponse = {
   access_token?: string;
@@ -43,12 +46,16 @@ export async function POST(request: Request) {
 
     if (!response.ok || !body.access_token) {
       const message = body.error_description ?? body.error ?? "Failed to exchange authorization code.";
+      routeLogger.warn({
+        error: body.error,
+        statusCode: response.status,
+      }, "Token exchange returned an unsuccessful response");
       return NextResponse.json({ error: message }, { status: response.ok ? 500 : response.status });
     }
 
     return NextResponse.json({ access_token: body.access_token, id_token: body.id_token });
   } catch (error) {
-    console.error("[auth/token] Token exchange failed.", error);
+    routeLogger.error({ err: error }, "Token exchange failed");
     return NextResponse.json({ error: "An unexpected error occurred." }, { status: 500 });
   }
 }

@@ -2,13 +2,15 @@
 
 This folder contains a WebSocket-based AI agent sample that demonstrates Asgardeo agent authentication with LangChain for the B2B Next.js app.
 
-The agent authenticates with Asgardeo using agent credentials, receives an agent access token, and uses that token to call a protected MCP server. The MCP tools are then exposed to a LangChain ReAct agent backed by Google Gemini, so clients can connect to the `/chat` WebSocket endpoint and let the agent call MCP tools on their behalf.
+The agent authenticates with Asgardeo using agent credentials, receives an agent access token, and can call protected B2B APIs either as itself or on behalf of the signed-in user. The chat endpoint is available only to authenticated users.
 
 ## What It Demonstrates
 
 - Authenticating an AI agent with Asgardeo
 - Requesting an agent token through `@asgardeo/javascript`
-- Passing the agent token to an MCP server as a bearer token
+- Switching the agent token into the signed-in user's organization for read-only travel-policy access
+- Requesting delegated user authorization before creating bookings on the user's behalf
+- Passing bearer tokens to the MCP server for general tool-backed conversations
 - Loading MCP tools with `@langchain/mcp-adapters`
 - Serving a `/chat` WebSocket endpoint for enterprise travel conversations
 
@@ -27,21 +29,7 @@ Create a local environment file from the example:
 cp .env.example .env
 ```
 
-Then update the values in `.env` for your local setup.
-
-Environment variables:
-
-- `CLIENT_ID`: Client ID of the Asgardeo application used by the agent flow.
-- `ASGARDEO_BASE_URL`: Base URL of your Asgardeo organization.
-- `REDIRECT_URI`: Redirect URI configured for the Asgardeo application.
-- `AGENT_ID`: Agent identifier issued by Asgardeo.
-- `AGENT_SECRET`: Agent secret issued by Asgardeo.
-- `GOOGLE_API_KEY`: API key used by the Gemini chat model.
-- `MODEL_NAME`: Optional Gemini model name. Defaults to `gemini-2.5-flash`.
-- `MCP_SERVER_URL`: Optional MCP server endpoint. Defaults to `http://localhost:8001/mcp`.
-- `AGENT_PORT`: Optional port for the WebSocket server. Defaults to `8791`.
-- `HOST`: Optional host for the WebSocket server. Defaults to `localhost`.
-- `INCLUDE_CLIENT_SECRET_IN_AUTHORIZE`: Optional troubleshooting flag. Defaults to `true`.
+Then update the values in `.env` for your local setup. The example file documents the required values.
 
 ## Run Locally
 
@@ -68,7 +56,28 @@ http://localhost:8791/health
 
 ## B2B Tool Flow
 
-The Next.js workspace includes a chat widget that connects to this agent. The agent authenticates with Asgardeo, forwards the agent token to the B2B MCP server, and can use tools for travel policies, organization users, roles, and sample enterprise fares.
+The Next.js workspace includes a chat widget that connects to this agent only after the user signs in. The widget sends the user's access token during the WebSocket handshake. The agent extracts the token, reads its `org_id`, and uses that organization for the current chat.
+
+For the autonomous-agent demo, the agent exchanges its own root agent token with Asgardeo's `organization_switch` grant using the signed-in user's `org_id` and the `view_travel_policy` scope. It then calls the B2B travel-policy and flight APIs directly with the switched agent token.
+
+The chat endpoint supports two demo modes:
+
+- Agent acting as itself: showing travel policy and eligible flights uses the switched agent token with `view_travel_policy`.
+- Agent acting on behalf of the user: booking requests return an Asgardeo authorization URL with `requested_actor` set to the agent ID and `scope=create_booking`. The user approves it, Asgardeo redirects to `/obo/callback`, and the agent exchanges the returned code before creating the booking directly with the delegated user token.
+
+Demo prompts:
+
+```text
+Show me the current travel policy for this organization.
+```
+
+```text
+Book option 1.
+```
+
+```text
+Book flight-nyc-lax-01.
+```
 
 ## WebSocket Protocol
 
@@ -85,6 +94,10 @@ Or a JSON payload:
   "message": "Add 45 and 99"
 }
 ```
+
+The WebSocket upgrade must include a signed-in user's token. Browser clients pass it as the `bearer` WebSocket subprotocol; proxy or non-browser clients can pass `Authorization: Bearer <access-token>`.
+
+If `mode` is omitted, the agent uses autonomous access for read-only travel-policy prompts and starts delegated authorization for booking prompts.
 
 The server responds with JSON messages. A successful agent reply has this shape:
 
@@ -103,6 +116,6 @@ The server can also send:
 
 ## Notes
 
-- The MCP server must accept `Authorization: Bearer <agent-access-token>`.
+- The MCP server must accept `Authorization: Bearer <access-token>` for general tool-backed paths.
 - The WebSocket endpoint currently accepts text frames with either plain text or JSON payloads.
 - The sample is intended for local demos and development. Do not commit real agent secrets, API keys, or local `.env` files.

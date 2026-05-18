@@ -324,6 +324,21 @@ strong {
   overflow-x: hidden;
 }
 
+.public-shell .topbar,
+.public-shell .hero,
+.public-shell .public-section,
+.public-shell .public-footer {
+  max-width: none;
+  width: 100%;
+}
+
+.public-shell .topbar,
+.public-shell .public-section,
+.public-shell .public-footer {
+  padding-left: clamp(24px, 4vw, 64px);
+  padding-right: clamp(24px, 4vw, 64px);
+}
+
 .public-shell .brand {
   color: var(--public-ink);
 }
@@ -448,9 +463,13 @@ strong {
 .public-shell .hero {
   background: var(--panel-soft);
   border: 1px solid var(--primary-ring);
-  border-radius: 8px;
+  border-left: 0;
+  border-radius: 0;
+  border-right: 0;
   min-height: calc(100vh - 96px);
   margin-top: 20px;
+  padding-left: clamp(24px, 4vw, 64px);
+  padding-right: clamp(24px, 4vw, 64px);
   padding-bottom: 56px;
 }
 
@@ -3686,9 +3705,10 @@ select.form-field-input {
   display: grid;
   gap: 12px;
   justify-items: end;
+  pointer-events: auto;
   position: fixed;
   right: 24px;
-  z-index: 60;
+  z-index: 250;
 }
 
 .agent-chat-panel,
@@ -3704,6 +3724,7 @@ select.form-field-input {
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: min(620px, calc(100vh - 112px));
   overflow: hidden;
+  pointer-events: auto;
   width: min(420px, calc(100vw - 32px));
 }
 
@@ -3823,6 +3844,89 @@ select.form-field-input {
   color: var(--muted);
 }
 
+.agent-chat-markdown {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-chat-markdown p,
+.agent-chat-markdown h3,
+.agent-chat-markdown ul,
+.agent-chat-markdown ol {
+  margin: 0;
+}
+
+.agent-chat-markdown h3 {
+  color: inherit;
+  font-size: 0.94rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.agent-chat-markdown ul,
+.agent-chat-markdown ol {
+  display: grid;
+  gap: 6px;
+  padding-left: 18px;
+}
+
+.agent-chat-markdown li {
+  padding-left: 2px;
+}
+
+.agent-chat-markdown strong {
+  font-weight: 800;
+}
+
+.agent-chat-markdown code {
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82em;
+  padding: 1px 5px;
+}
+
+.agent-chat-markdown a {
+  color: inherit;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.agent-chat-table-wrap {
+  overflow-x: auto;
+}
+
+.agent-chat-markdown table {
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  min-width: 100%;
+}
+
+.agent-chat-markdown th,
+.agent-chat-markdown td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-chat-markdown th {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.agent-chat-authorization-link {
+  color: inherit;
+  display: block;
+  font-weight: 750;
+  margin-top: 8px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .agent-chat-composer {
   align-items: end;
   background: #ffffff;
@@ -3848,6 +3952,7 @@ select.form-field-input {
 .agent-chat-input-label input {
   border: 1px solid var(--line);
   border-radius: 8px;
+  cursor: text;
   min-height: 42px;
   outline: none;
   padding: 0 12px;

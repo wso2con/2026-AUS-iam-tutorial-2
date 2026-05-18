@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { logger } from "../../lib/logging/logger";
+
+const routeLogger = logger.child({ route: "onboarding" });
 
 type OnboardingRequest = {
   email?: string;
@@ -387,7 +390,7 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
-    console.error("[onboarding] Failed to complete onboarding.", error);
+    routeLogger.error({ err: error }, "Failed to complete onboarding");
 
     return NextResponse.json(
       {

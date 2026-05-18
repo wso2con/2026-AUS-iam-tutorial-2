@@ -8,6 +8,9 @@ import {
   brandingDelete,
   type BrandingConfig,
 } from "../../../lib/asgardeo/client";
+import { logger } from "../../../lib/logging/logger";
+
+const routeLogger = logger.child({ route: "organization/branding" });
 
 const baseUrl = (process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "").replace(/\/$/, "");
 const clientId = process.env.ASGARDEO_CLIENT_ID ?? process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID ?? "";
@@ -137,6 +140,7 @@ export async function POST(request: NextRequest) {
     const record = upsertBranding(orgId, config);
     return NextResponse.json({ branding: recordToConfig(record) }, { status: 201 });
   } catch (err) {
+    routeLogger.error({ err, orgId }, "Failed to create branding");
     const message = err instanceof Error ? err.message : "Failed to create branding.";
     return NextResponse.json({ error: message }, { status: 502 });
   }
@@ -165,6 +169,7 @@ export async function PUT(request: NextRequest) {
     const record = upsertBranding(orgId, config);
     return NextResponse.json({ branding: recordToConfig(record) });
   } catch (err) {
+    routeLogger.error({ err, orgId }, "Failed to update branding");
     const message = err instanceof Error ? err.message : "Failed to update branding.";
     return NextResponse.json({ error: message }, { status: 502 });
   }
@@ -187,6 +192,7 @@ export async function DELETE(request: NextRequest) {
     deleteBranding(orgId);
     return new NextResponse(null, { status: 204 });
   } catch (err) {
+    routeLogger.error({ err, orgId }, "Failed to delete branding");
     const message = err instanceof Error ? err.message : "Failed to delete branding.";
     return NextResponse.json({ error: message }, { status: 502 });
   }
