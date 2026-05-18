@@ -33,15 +33,6 @@ export async function POST(request: Request) {
 
     const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
-    console.log({
-        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-        subject_token,
-        subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
-        requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
-        actor_token,
-        actor_token_type: "urn:ietf:params:oauth:token-type:id_token",
-      })
-
     const response = await fetch(`${baseUrl}/oauth2/token`, {
       body: new URLSearchParams({
         grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -60,7 +51,6 @@ export async function POST(request: Request) {
 
     const body = (await response.json().catch(() => ({}))) as TokenResponse;
 
-    console.log(response);
     if (!response.ok || !body.access_token) {
       const message = body.error_description ?? body.error ?? "Token exchange failed.";
       console.error("[auth/impersonate] Asgardeo token exchange failed.", {

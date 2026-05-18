@@ -62,6 +62,19 @@ interface PolicyResult {
   violations: string[];
 }
 
+// ─── Date helpers ─────────────────────────────────────────────────────────────
+
+// Returns "YYYY-MM-DD" parsed from the departure half of a dates string like "Jun 12 - Jun 18".
+function parseDepartureDate(dates: string): string | null {
+  const match = dates.match(/^([A-Za-z]+ \d+)/);
+  if (!match) return null;
+  const d = new Date(`${match[1]} 2026`);
+  if (isNaN(d.getTime())) return null;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `2026-${mm}-${dd}`;
+}
+
 // ─── Policy helpers ───────────────────────────────────────────────────────────
 
 const CABIN_RANK: Record<string, number> = {
@@ -287,6 +300,8 @@ export default function BookingsDashboard({ roles }: { roles: UserRole[] }) {
   const [fromCity, setFromCity] = useState("");
   const [toCity, setToCity] = useState("");
   const [cabinFilter, setCabinFilter] = useState("All");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const [bookingFlight, setBookingFlight] = useState<string | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
@@ -422,14 +437,18 @@ export default function BookingsDashboard({ roles }: { roles: UserRole[] }) {
 
   // ── Derived data ─────────────────────────────────────────────────────────
 
-  const bookedFlightIds = new Set(
-    bookings.filter((b) => b.status === "confirmed").map((b) => b.flight_id)
-  );
   const bookingByFlightId = Object.fromEntries(
     bookings.filter((b) => b.status === "confirmed").map((b) => [b.flight_id, b])
   );
 
-  const sortedFlights = [...flights].sort((a, b) => {
+  const filteredFlights = flights.filter((f) => {
+    const dep = parseDepartureDate(f.dates);
+    if (dateFrom && dep && dep < dateFrom) return false;
+    if (dateTo && dep && dep > dateTo) return false;
+    return true;
+  });
+
+  const sortedFlights = [...filteredFlights].sort((a, b) => {
     const pa = evaluatePolicy(a, policy);
     const pb = evaluatePolicy(b, policy);
     const ORDER: Record<PolicyStatus, number> = { "in-policy": 0, "approval-required": 1, "out-of-policy": 2 };
@@ -561,6 +580,27 @@ export default function BookingsDashboard({ roles }: { roles: UserRole[] }) {
                 <option>Business</option>
                 <option>First Class</option>
               </select>
+            </label>
+          </div>
+          <div className="booking-search-row">
+            <label className="booking-search-label">
+              Earliest departure
+              <input
+                type="date"
+                className="booking-search-input"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+              />
+            </label>
+            <label className="booking-search-label">
+              Latest departure
+              <input
+                type="date"
+                className="booking-search-input"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={(e) => setDateTo(e.target.value)}
+              />
             </label>
           </div>
           <button className="button button-primary" type="submit" style={{ justifySelf: "start" }}>

@@ -36,7 +36,7 @@ export default function Home() {
           </div>
           <div className="route-card">
             <span>Next review</span>
-            <strong>Colombo to Singapore</strong>
+            <strong>New York to Los Angeles</strong>
             <p>In-policy economy fare, 9 travelers, approval window closes at 4:30 PM.</p>
           </div>
           <div className="flight-list-preview">
