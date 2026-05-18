@@ -251,13 +251,10 @@ export function AuthProvider({ children, initialIsExchanging = false }: { childr
 
   // Handle impersonation subject_token callback
   useEffect(() => {
-    const queryParams = new URLSearchParams(window.location.search);
     const fragmentParams = new URLSearchParams(window.location.hash.slice(1));
-    const fromFragment = fragmentParams.has("subject_token");
-    const params = fromFragment ? fragmentParams : queryParams;
 
-    const subjectToken = params.get("subject_token");
-    const state = params.get("state");
+    const subjectToken = fragmentParams.get("subject_token");
+    const state = fragmentParams.get("state");
 
     if (!subjectToken || state !== "impersonating" || exchangingRef.current) {
       return;
@@ -266,24 +263,16 @@ export function AuthProvider({ children, initialIsExchanging = false }: { childr
     setIsExchanging(true);
     exchangingRef.current = true;
 
-    const callbackIdToken = params.get("id_token");
+    const callbackIdToken = fragmentParams.get("id_token");
 
+    fragmentParams.delete("subject_token");
+    fragmentParams.delete("id_token");
+    fragmentParams.delete("session_state");
+    fragmentParams.delete("state");
+    fragmentParams.delete("nonce");
     const url = new URL(window.location.href);
-    if (fromFragment) {
-      fragmentParams.delete("subject_token");
-      fragmentParams.delete("id_token");
-      fragmentParams.delete("session_state");
-      fragmentParams.delete("state");
-      fragmentParams.delete("nonce");
-      const remaining = fragmentParams.toString();
-      url.hash = remaining ? `#${remaining}` : "";
-    } else {
-      url.searchParams.delete("subject_token");
-      url.searchParams.delete("id_token");
-      url.searchParams.delete("session_state");
-      url.searchParams.delete("state");
-      url.searchParams.delete("nonce");
-    }
+    const remaining = fragmentParams.toString();
+    url.hash = remaining ? `#${remaining}` : "";
     window.history.replaceState({}, "", url.toString());
 
     const actorToken = callbackIdToken ?? localStorage.getItem("id_token");

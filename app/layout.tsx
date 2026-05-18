@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { headers } from "next/headers";
 import { AuthProvider } from "./lib/auth/client";
@@ -13,11 +13,14 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "Wayfinder",
   description: "Wayfinder helps agencies, finance teams, and client administrators manage corporate travel programs, policies, and spend across multiple workspaces.",
-  themeColor: "#2563eb",
   icons: {
     icon: "/wayfinder-logo.png",
     apple: "/wayfinder-logo.png"
   }
+};
+
+export const viewport: Viewport = {
+  themeColor: "#2563eb"
 };
 
 export const dynamic = "force-dynamic";

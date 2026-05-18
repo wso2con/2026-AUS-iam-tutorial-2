@@ -780,7 +780,7 @@ export default function OrganizationDashboard({ roles }: { roles: UserRole[] }) 
                   </button>
                 </div>
 
-                {editUser.status === "Active" && (
+                {false && editUser.status === "Active" && (
                   <div className="modal-action-card">
                     <div className="modal-action-icon modal-action-icon--purple">
                       <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
