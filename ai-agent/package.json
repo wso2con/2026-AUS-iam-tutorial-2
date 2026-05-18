@@ -14,9 +14,11 @@
   "description": "",
   "dependencies": {
     "@asgardeo/javascript": "^0.9.0",
+    "@langchain/anthropic": "^0.3.34",
     "@langchain/google-genai": "^0.2.16",
     "@langchain/langgraph": "^0.3.6",
     "@langchain/mcp-adapters": "^0.6.0",
+    "@langchain/openai": "^0.6.17",
     "dotenv": "^16.5.0",
     "tsx": "^4.19.4"
   },

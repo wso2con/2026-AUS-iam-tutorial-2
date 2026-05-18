@@ -20,8 +20,10 @@ import { performance } from "node:perf_hooks";
 import type { Duplex } from "node:stream";
 
 import { AsgardeoJavaScriptClient } from "@asgardeo/javascript";
+import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { ChatOpenAI } from "@langchain/openai";
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import dotenv from "dotenv";
 import { dirname, resolve } from "node:path";
@@ -176,10 +178,40 @@ const delegatedUserOrganizationScopes = getEnv("DELEGATED_USER_ORG_SCOPES") || D
 const oboRedirectUri = getEnv("OBO_REDIRECT_URI") || new URL("/obo/callback", asgardeoConfig.afterSignInUrl).toString();
 const oboResource = getEnv("OBO_RESOURCE");
 
-const model = new ChatGoogleGenerativeAI({
-    apiKey: getEnv("GOOGLE_API_KEY"),
-    model: getEnv("MODEL_NAME") || "gemini-2.5-flash",
-});
+type ModelProvider = "gemini" | "openai" | "anthropic" | "deepseek";
+
+function createModel() {
+    const provider = (getEnv("MODEL_PROVIDER") || "gemini").toLowerCase() as ModelProvider;
+    const modelName = getEnv("MODEL_NAME");
+
+    switch (provider) {
+        case "openai":
+            return new ChatOpenAI({
+                apiKey: getEnv("OPENAI_API_KEY"),
+                model: modelName || "gpt-4o-mini",
+            });
+        case "anthropic":
+            return new ChatAnthropic({
+                apiKey: getEnv("ANTHROPIC_API_KEY"),
+                model: modelName || "claude-sonnet-4-6",
+            });
+        case "deepseek":
+            return new ChatOpenAI({
+                apiKey: getEnv("DEEPSEEK_API_KEY"),
+                model: modelName || "deepseek-chat",
+                configuration: { baseURL: "https://api.deepseek.com/v1" },
+            });
+        case "gemini":
+        default:
+            return new ChatGoogleGenerativeAI({
+                apiKey: getEnv("GOOGLE_API_KEY"),
+                model: modelName || "gemini-2.0-flash",
+            });
+    }
+}
+
+const modelProvider = (getEnv("MODEL_PROVIDER") || "gemini").toLowerCase() as ModelProvider;
+const model = createModel();
 
 const agentPrompt = [
     "You are Wayfinder Enterprise's AI assistant for business travel administrators and employees.",
@@ -707,23 +739,6 @@ function extractBookingSearchCriteria(messages: ChatMessage[]): BookingSearchCri
     return criteria;
 }
 
-function getMissingBookingCriteria(criteria: BookingSearchCriteria) {
-    const missing: string[] = [];
-
-    if (!criteria.from) missing.push("departure city");
-    if (!criteria.to) missing.push("destination city");
-    if (!criteria.departureDate) missing.push("departure date");
-
-    return missing;
-}
-
-function formatMissingBookingCriteriaPrompt(missing: string[]) {
-    if (missing.length === 0) {
-        return "";
-    }
-
-    return `Please share the ${missing.join(", ")} so I can find eligible flights.`;
-}
 
 function normalizeDateText(value: string) {
     return value
@@ -1095,14 +1110,22 @@ function includeClientSecretInAgentAuthorizeRequest(client: AsgardeoJavaScriptCl
 }
 
 function validateAgentConfiguration() {
-    const requiredValues = {
+    const providerApiKeyEnvVar: Record<ModelProvider, string> = {
+        gemini: "GOOGLE_API_KEY",
+        openai: "OPENAI_API_KEY",
+        anthropic: "ANTHROPIC_API_KEY",
+        deepseek: "DEEPSEEK_API_KEY",
+    };
+    const apiKeyEnvVar = providerApiKeyEnvVar[modelProvider] ?? "GOOGLE_API_KEY";
+
+    const requiredValues: Record<string, string | undefined> = {
         ASGARDEO_BASE_URL: asgardeoConfig.baseUrl,
         CLIENT_ID: asgardeoConfig.clientId,
         CLIENT_SECRET: asgardeoConfig.clientSecret,
         REDIRECT_URI: asgardeoConfig.afterSignInUrl,
         AGENT_ID: agentConfig.agentID,
         AGENT_SECRET: agentConfig.agentSecret,
-        GOOGLE_API_KEY: getEnv("GOOGLE_API_KEY"),
+        [apiKeyEnvVar]: getEnv(apiKeyEnvVar),
     };
     const missingValues = Object.entries(requiredValues)
         .filter(([, value]) => !value)
@@ -1144,7 +1167,8 @@ async function createMcpAgent(authorization: string, mode: ChatInvocationMode): 
         },
     });
 
-    const tools = sanitizeToolSchemasForGemini(await client.getTools());
+    const rawTools = await client.getTools();
+    const tools = modelProvider === "gemini" ? sanitizeToolSchemasForGemini(rawTools) : rawTools;
     logger.info({
         mode,
         tools: tools.map((tool) => tool.name).filter(Boolean),
@@ -1577,17 +1601,6 @@ async function runAgentServer() {
 
                                         if (!flightId) {
                                             const criteria = extractBookingSearchCriteria(chatRequest.messages);
-                                            const missingCriteria = getMissingBookingCriteria(criteria);
-
-                                            if (missingCriteria.length > 0) {
-                                                sendJson(socket, {
-                                                    type: "response",
-                                                    message: formatMissingBookingCriteriaPrompt(missingCriteria),
-                                                });
-
-                                                return "";
-                                            }
-
                                             const result = await getTravelPolicyAndEligibleFlights(rootRuntime, authenticatedOrgId, criteria);
                                             lastSuggestedFlights = result.flights.filter((flight) => flight.policyStatus !== "out-of-policy");
 
