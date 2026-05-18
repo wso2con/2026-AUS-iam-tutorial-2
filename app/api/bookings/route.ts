@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireScope } from "../../lib/auth/guard";
 import { getRolesFromPermissions, Scope, UserRole } from "../../lib/auth/utils";
+import { logRequestActor } from "../../lib/auth/log";
 import {
   createOrgBooking,
   findDuplicateOrgBooking,
@@ -15,6 +16,7 @@ function generateReference(): string {
 }
 
 export async function GET(request: NextRequest) {
+  logRequestActor("bookings", request);
   const auth = await requireScope(request, [Scope.BOOKING_VIEW]);
   if (auth instanceof NextResponse) return auth;
 
@@ -31,6 +33,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  logRequestActor("bookings", request);
   const auth = await requireScope(request, [Scope.BOOKING_CREATE]);
   if (auth instanceof NextResponse) return auth;
 

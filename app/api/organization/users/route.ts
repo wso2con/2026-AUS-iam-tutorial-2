@@ -3,6 +3,7 @@ import { requireScope } from "../../../lib/auth/guard";
 import { Scope, USER_ROLE_TO_ASGARDEO_ROLE, UserRole } from "../../../lib/auth/utils";
 import { scimAssignRoleToUser, scimCreateUser, scimFetchRoleIdByName, scimListUsers } from "../../../lib/asgardeo/client";
 import { logger } from "../../../lib/logging/logger";
+import { logRequestActor } from "../../../lib/auth/log";
 
 const routeLogger = logger.child({ route: "organization/users" });
 
@@ -18,6 +19,7 @@ function resolveAsgardeoRoleName(uiRole: string): string {
 }
 
 export async function GET(request: NextRequest) {
+  logRequestActor("organization/users", request);
   const auth = await requireScope(request, [Scope.USER_LIST]);
   if (auth instanceof NextResponse) return auth;
 
@@ -47,6 +49,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  logRequestActor("organization/users", request);
   const auth = await requireScope(request, [Scope.USER_CREATE]);
   if (auth instanceof NextResponse) return auth;
 

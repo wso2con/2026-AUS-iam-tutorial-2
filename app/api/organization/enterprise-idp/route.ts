@@ -4,10 +4,12 @@ import { Scope } from "../../../lib/auth/utils";
 import { getEnterpriseIdp, upsertEnterpriseIdp, deleteEnterpriseIdp } from "../../../lib/db/queries/enterprise-idp";
 import { idpCreate, idpGet, idpUpdate, idpDelete, appGetIdByName, appAddIdpToAuthSequence, appRemoveIdpFromAuthSequence, type IdpConfig } from "../../../lib/asgardeo/client";
 import { logger } from "../../../lib/logging/logger";
+import { logRequestActor } from "../../../lib/auth/log";
 
 const routeLogger = logger.child({ route: "organization/enterprise-idp" });
 
 export async function GET(request: NextRequest) {
+  logRequestActor("organization/enterprise-idp", request);
   const auth = await requireScope(request, [Scope.IDP_VIEW]);
   if (auth instanceof NextResponse) return auth;
 
@@ -61,6 +63,7 @@ function validateConfig(body: CreateBody): IdpConfig | NextResponse {
 }
 
 export async function POST(request: NextRequest) {
+  logRequestActor("organization/enterprise-idp", request);
   const auth = await requireScope(request, [Scope.IDP_CREATE, Scope.APP_MGT_VIEW, Scope.APP_MGT_UPDATE], "all");
   if (auth instanceof NextResponse) return auth;
 
@@ -95,6 +98,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  logRequestActor("organization/enterprise-idp", request);
   const auth = await requireScope(request, [Scope.IDP_UPDATE]);
   if (auth instanceof NextResponse) return auth;
 
@@ -126,6 +130,7 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  logRequestActor("organization/enterprise-idp", request);
   const auth = await requireScope(request, [Scope.IDP_DELETE, Scope.APP_MGT_VIEW, Scope.APP_MGT_UPDATE], "all");
   if (auth instanceof NextResponse) return auth;
 

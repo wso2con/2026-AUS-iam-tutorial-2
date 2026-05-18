@@ -3,6 +3,7 @@ import { requireScope } from "../../../../lib/auth/guard";
 import { Scope } from "../../../../lib/auth/utils";
 import { scimUpdateAccountLocked } from "../../../../lib/asgardeo/client";
 import { logger } from "../../../../lib/logging/logger";
+import { logRequestActor } from "../../../../lib/auth/log";
 
 const routeLogger = logger.child({ route: "organization/users/[id]" });
 
@@ -12,6 +13,7 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  logRequestActor("organization/users/[id]", request);
   const auth = await requireScope(request, [Scope.USER_UPDATE]);
   if (auth instanceof NextResponse) return auth;
 

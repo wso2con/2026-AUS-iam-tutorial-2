@@ -9,6 +9,7 @@ import {
   type BrandingConfig,
 } from "../../../lib/asgardeo/client";
 import { logger } from "../../../lib/logging/logger";
+import { logRequestActor } from "../../../lib/auth/log";
 
 const routeLogger = logger.child({ route: "organization/branding" });
 
@@ -109,6 +110,7 @@ function buildConfig(body: Record<string, unknown>): BrandingConfig | NextRespon
 }
 
 export async function GET(request: NextRequest) {
+  logRequestActor("organization/branding", request);
   const auth = await requireAuth(request);
   if (auth instanceof NextResponse) return auth;
 
@@ -123,6 +125,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  logRequestActor("organization/branding", request);
   const auth = await requireScope(request, [Scope.BRANDING_CREATE_BASIC, Scope.BRANDING_CREATE_ADVANCED]);
   if (auth instanceof NextResponse) return auth;
 
@@ -147,6 +150,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  logRequestActor("organization/branding", request);
   const auth = await requireScope(request, [Scope.BRANDING_CREATE_BASIC, Scope.BRANDING_CREATE_ADVANCED]);
   if (auth instanceof NextResponse) return auth;
 
@@ -176,6 +180,7 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  logRequestActor("organization/branding", request);
   const auth = await requireScope(request, [Scope.BRANDING_DELETE]);
   if (auth instanceof NextResponse) return auth;
 

@@ -3,10 +3,12 @@ import { requireScope } from "../../../lib/auth/guard";
 import { ASGARDEO_ROLE_TO_USER_ROLE, Scope } from "../../../lib/auth/utils";
 import { scimListRolesWithUsers } from "../../../lib/asgardeo/client";
 import { logger } from "../../../lib/logging/logger";
+import { logRequestActor } from "../../../lib/auth/log";
 
 const routeLogger = logger.child({ route: "organization/roles" });
 
 export async function GET(request: NextRequest) {
+  logRequestActor("organization/roles", request);
   const auth = await requireScope(request, [Scope.ROLE_VIEW]);
   if (auth instanceof NextResponse) return auth;
 

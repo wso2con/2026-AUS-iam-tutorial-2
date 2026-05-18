@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "../../lib/auth/guard";
 import { listFlights } from "../../lib/db/queries/flights";
+import { logRequestActor } from "../../lib/auth/log";
 
 export async function GET(request: NextRequest) {
+  logRequestActor("flights", request);
   const auth = await requireAuth(request);
   if (auth instanceof NextResponse) return auth;
 
