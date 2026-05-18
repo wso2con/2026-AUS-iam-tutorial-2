@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch agent.ts",
+    "claude:dev": "tsx watch agent-with-claude-wif.ts",
     "start": "tsx agent.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
