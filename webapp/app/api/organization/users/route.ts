@@ -25,9 +25,11 @@ export async function GET(request: NextRequest) {
 
   try {
     const accessToken = request.headers.get("authorization")!.slice(7);
-    const { users, totalResults } = await scimListUsers(accessToken);
+    const { users } = await scimListUsers(accessToken);
 
-    const mapped = users.map((u) => {
+    const localUsers = users.filter((u) => !u["urn:scim:wso2:schema"]?.managedOrg);
+
+    const mapped = localUsers.map((u) => {
       const rawEmail = u.emails?.[0];
       const email =
         typeof rawEmail === "string" ? rawEmail :
@@ -41,7 +43,7 @@ export async function GET(request: NextRequest) {
       return { id: u.id, userName: u.userName, email, name, status };
     });
 
-    return NextResponse.json({ users: mapped, totalResults });
+    return NextResponse.json({ users: mapped, totalResults: mapped.length });
   } catch (error) {
     routeLogger.error({ err: error }, "Failed to list users");
     return NextResponse.json({ message: "Failed to fetch users." }, { status: 500 });

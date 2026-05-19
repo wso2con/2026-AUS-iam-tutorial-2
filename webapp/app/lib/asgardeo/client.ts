@@ -10,7 +10,7 @@ export interface ScimUser {
   userName: string;
   name?: { givenName?: string; familyName?: string };
   emails?: string[] | Array<{ value: string; primary?: boolean }>;
-  "urn:scim:wso2:schema"?: { accountLocked?: string };
+  "urn:scim:wso2:schema"?: { accountLocked?: string; managedOrg?: string };
 }
 
 export interface ScimRole {

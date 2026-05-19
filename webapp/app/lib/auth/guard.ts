@@ -8,10 +8,15 @@ export interface TokenClaims {
   roles: string[];
 }
 
-const baseUrl = (process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "").replace(/\/$/, "");
-const jwksUrl = new URL(`${baseUrl}/oauth2/jwks`);
+let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
-const JWKS = createRemoteJWKSet(jwksUrl);
+function getJWKS() {
+  if (!_jwks) {
+    const baseUrl = (process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "").replace(/\/$/, "");
+    _jwks = createRemoteJWKSet(new URL(`${baseUrl}/oauth2/jwks`));
+  }
+  return _jwks;
+}
 
 /**
  * Validates the Bearer token and returns extracted claims, or a 401 response.
@@ -30,7 +35,7 @@ export async function requireAuth(
   }
 
   try {
-    const { payload } = await jwtVerify(token, JWKS);
+    const { payload } = await jwtVerify(token, getJWKS());
 
     const orgId = typeof payload.org_id === "string" ? payload.org_id : "";
 

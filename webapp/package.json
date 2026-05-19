@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "seed:flights": "node --experimental-vm-modules scripts/seed-flights.js"
+    "seed:flights": "node --experimental-vm-modules scripts/seed-flights.js",
+    "db:drop": "node --experimental-vm-modules scripts/drop-db.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",

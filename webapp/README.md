@@ -69,3 +69,13 @@ npm run seed:flights -- --force
 ```
 
 > The seed script is safe to run multiple times without `--force` — it exits early if data already exists.
+
+### Resetting the database
+
+To fully delete the database and its data folder, run:
+
+```bash
+npm run db:drop
+```
+
+The script reads `DB_PATH` from your environment (same as the app). If `DB_PATH` is not set, it removes the entire `data/` folder. If `DB_PATH` points to a custom location, only that file is deleted. After dropping, re-run `npm run seed:flights` to recreate the database.
