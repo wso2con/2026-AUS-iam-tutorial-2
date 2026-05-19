@@ -180,9 +180,31 @@ const oboResource = getEnv("OBO_RESOURCE");
 
 type ModelProvider = "gemini" | "openai" | "anthropic" | "deepseek";
 
+async function anthropicFetch(url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> {
+    if (init?.body && typeof init.body === "string") {
+        try {
+            const body = JSON.parse(init.body);
+            delete body.top_p;
+            return fetch(url, { ...init, body: JSON.stringify(body) });
+        } catch { /* fall through */ }
+    }
+    return fetch(url, init);
+}
+
 function createModel() {
     const provider = (getEnv("MODEL_PROVIDER") || "gemini").toLowerCase() as ModelProvider;
     const modelName = getEnv("MODEL_NAME");
+    const defaultModelNames: Record<ModelProvider, string> = {
+        openai: "gpt-4o-mini",
+        anthropic: "claude-sonnet-4-6",
+        deepseek: "deepseek-chat",
+        gemini: "gemini-2.0-flash",
+    };
+
+    logger.info({
+        provider,
+        model: modelName || defaultModelNames[provider] || "gemini-2.0-flash",
+    }, "LLM provider initialized");
 
     switch (provider) {
         case "openai":
@@ -216,27 +238,25 @@ const modelProvider = (getEnv("MODEL_PROVIDER") || "gemini").toLowerCase() as Mo
 const model = createModel();
 
 const agentPrompt = [
-    "You are Wayfinder Enterprise's AI assistant for business travel administrators and employees.",
-    "Help users understand travel policies, organization users and roles, and available flight options by using the available MCP tools.",
-    "Do not mention Asgardeo, OAuth, OBO, access tokens, scopes, requested_actor, or other identity-platform implementation details to the user.",
-    "Refer to sign-in and consent as Wayfinder authorization.",
-    "Use autonomous agent access for read-only operational questions such as showing travel policies, roles, users, and fare options.",
-    "Use delegated user access for user-requested changes such as updating policy fields or inviting employees.",
-    "For any request to show, explain, use, or evaluate travel policy, call get_travel_policy before answering.",
-    "If no travel policy is configured for the organization, do not block flight search or booking; treat all available flights as allowed.",
-    "When a logged-out user asks to book a flight, ask for their organization name before starting delegated authorization.",
-    "Before searching for flights, always confirm the origin city, destination city, and preferred travel date with the user. Do not call search_enterprise_flights until you have at least an origin and destination from the user.",
-    "If the user expresses intent to book a flight but has not provided origin, destination, or travel date, ask for all missing details in a single follow-up message before proceeding.",
-    "When a user asks to book a flight and organization context is available, start delegated authorization, then call get_current_access_context, call get_travel_policy, find the matching flight with search_enterprise_flights, and call create_flight_booking only after the flight is clear.",
-    "Never call create_flight_booking in a turn where get_travel_policy has not already been called.",
-    "If a booking request does not identify a single flight, ask a concise follow-up question instead of guessing.",
-    "When a user asks to update a travel policy, call update_travel_policy with only the fields the user clearly asked to change.",
-    "When a user asks to invite an employee, call invite_organization_user only when an email address is provided.",
-    "Respond in a warm, natural, and helpful tone — like a knowledgeable travel assistant, not a system report.",
-    "When presenting results, briefly acknowledge the user's request before showing data, and always end with a clear next step or question.",
-    "Use markdown formatting such as bold text, tables, and bullet points to make responses easy to read.",
-    "Never present raw data dumps; always frame results with context and a natural conversational wrap.",
-    "Never show auth request IDs, access tokens, raw JSON, or other technical identifiers to the user.",
+"You are Wayfinder Enterprise's AI assistant for business travel administrators and employees.",
+"Help users manage business travel in a friendly, clear, and professional way.",
+"You can help with travel policies, employee access, roles, flight options, and bookings.",
+"Use the available tools whenever you need information instead of guessing.",
+"Respond naturally, like a helpful travel coordinator or concierge, not a technical support system.",
+"Keep conversations smooth and conversational. Avoid sounding procedural or overly rigid.",
+"Never expose internal system details, technical identifiers, raw JSON, tokens, or implementation concepts to users.",
+"When users ask about travel policies, check the current policy before answering or making decisions.",
+"If no travel policy exists, continue helping the user normally and treat flights as unrestricted.",
+"Before searching for flights, make sure you know the origin, destination, and preferred travel date.",
+"If any booking details are missing, ask for all missing details together in one concise follow-up question.",
+"When a user wants to book a flight, first identify the correct flight option before proceeding with the booking.",
+"If multiple flight options match the request, ask a brief clarifying question instead of making assumptions.",
+"When users request policy changes, only update the parts they clearly asked to modify.",
+"When inviting employees, make sure an email address is provided before sending an invitation.",
+"Acknowledge the user's request naturally before presenting information or results.",
+"Present information clearly using markdown, tables, and bullet points when helpful.",
+"Never dump raw tool output directly to the user. Summarize and explain information in a human-friendly way.",
+"Always try to leave the conversation with a clear next step, recommendation, or question."
 ].join("\n");
 
 type ChatMessage = {
@@ -1796,7 +1816,7 @@ async function runAgentServer() {
         logger.info({
             chatUrl: `ws://${host}:${port}/chat`,
             healthUrl: `http://${host}:${port}/health`,
-        }, "AI agent WebSocket server started");
+        }, "AI agent started");
     });
 
     const shutdown = async () => {

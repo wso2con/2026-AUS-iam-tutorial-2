@@ -21,6 +21,11 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
+import { createLogger } from "./logger.js";
+
+let requestCounter = 0;
+
+const logger = createLogger({ service: "mcp-server" });
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -87,6 +92,8 @@ function getAuthorizationHeader(request: IncomingMessage): string | undefined {
 }
 
 function createApiClient(authorization?: string) {
+    const apiLogger = logger.child({ component: "api" });
+
     async function requestApi(path: string, options: RequestInit = {}): Promise<JsonValue> {
         const headers = new Headers(options.headers);
         const method = options.method ?? "GET";
@@ -101,7 +108,9 @@ function createApiClient(authorization?: string) {
             headers.set("Authorization", authorization);
         }
 
-        console.log("[mcp] forwarding app request", method, path);
+        apiLogger.debug({ method, path }, "outbound request");
+
+        const t0 = Date.now();
 
         const response = await fetch(`${appBaseUrl}${path}`, {
             ...options,
@@ -109,7 +118,9 @@ function createApiClient(authorization?: string) {
             signal: AbortSignal.timeout(30000),
         });
 
-        console.log("[mcp] app response received", method, path, response.status);
+        const durationMs = Date.now() - t0;
+
+        apiLogger.info({ method, path, status: response.status, durationMs }, "response received");
 
         const contentType = response.headers.get("content-type") || "";
         const body = contentType.includes("application/json")
@@ -117,6 +128,7 @@ function createApiClient(authorization?: string) {
             : await response.text();
 
         if (!response.ok) {
+            apiLogger.warn({ method, path, status: response.status }, "upstream error response");
             throw new Error(`B2B app request failed with ${response.status}: ${JSON.stringify(body)}`);
         }
 
@@ -147,40 +159,64 @@ function toToolContent(data: JsonValue) {
     };
 }
 
-function createEnterpriseMcpServer(authorization?: string) {
+function createEnterpriseMcpServer(authorization?: string, reqId?: number) {
     const api = createApiClient(authorization);
     const tokenPayload = decodeJwtPayload(getBearerToken(authorization));
+
+    const tokenContext = {
+        sub: typeof tokenPayload?.sub === "string" ? tokenPayload.sub : undefined,
+        org_id: typeof tokenPayload?.org_id === "string" ? tokenPayload.org_id : undefined,
+        roles: Array.isArray(tokenPayload?.roles)
+            ? tokenPayload.roles.map(String)
+            : typeof tokenPayload?.roles === "string"
+            ? [tokenPayload.roles]
+            : [],
+        hasAct: tokenPayload?.act != null,
+    };
+
+    const mcpLogger = logger.child({ component: "mcp", reqId });
+    const toolLogger = logger.child({ component: "tool", reqId });
+
+    mcpLogger.info({ ...tokenContext }, "creating MCP server instance");
+
     const server = new McpServer({
         name: "wayfinder-enterprise-mcp",
         version: "1.0.0",
     });
 
+    async function runTool<T>(name: string, args: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+        toolLogger.info({ tool: name, args }, "invoked");
+        const t0 = Date.now();
+        try {
+            const result = await fn();
+            toolLogger.info({ tool: name, durationMs: Date.now() - t0 }, "completed");
+            return result;
+        } catch (err) {
+            toolLogger.error({ tool: name, durationMs: Date.now() - t0, err }, "failed");
+            throw err;
+        }
+    }
+
     server.tool(
         "get_current_access_context",
         "Get the authenticated subject, actor, roles, organization, and scopes from the current access token.",
         {},
-        async () => toToolContent({
+        () => runTool("get_current_access_context", {}, async () => toToolContent({
             actor: tokenPayload?.act ?? null,
-            organizationId: typeof tokenPayload?.org_id === "string" ? tokenPayload.org_id : "",
-            roles: Array.isArray(tokenPayload?.roles)
-                ? tokenPayload.roles.map(String)
-                : typeof tokenPayload?.roles === "string"
-                ? [tokenPayload.roles]
-                : [],
+            organizationId: tokenContext.org_id ?? "",
+            roles: tokenContext.roles,
             scopes: typeof tokenPayload?.scope === "string" ? tokenPayload.scope.split(" ") : [],
-            subject: typeof tokenPayload?.sub === "string" ? tokenPayload.sub : "",
-        } as JsonValue),
+            subject: tokenContext.sub ?? "",
+        } as JsonValue)),
     );
 
     server.tool(
         "get_travel_policy",
         "Get the active travel policy for the authenticated organization. Use this before answering travel-policy questions and before creating a flight booking.",
         {},
-        async () => {
-            console.log("[mcp] get_travel_policy tool invoked");
-
-            return toToolContent(await api.get("/api/travel-policies"));
-        },
+        () => runTool("get_travel_policy", {}, async () =>
+            toToolContent(await api.get("/api/travel-policies")),
+        ),
     );
 
     server.tool(
@@ -191,14 +227,18 @@ function createEnterpriseMcpServer(authorization?: string) {
             max_flight_price: z.number().int().min(0).max(100000).optional(),
             price_cap_percent: z.number().int().min(0).max(200).optional(),
         },
-        async (policy) => toToolContent(await api.put("/api/travel-policies", policy as JsonValue)),
+        (policy) => runTool("update_travel_policy", policy as Record<string, unknown>, async () =>
+            toToolContent(await api.put("/api/travel-policies", policy as JsonValue)),
+        ),
     );
 
     server.tool(
         "list_organization_users",
         "List users in the authenticated organization.",
         {},
-        async () => toToolContent(await api.get("/api/organization/users")),
+        () => runTool("list_organization_users", {}, async () =>
+            toToolContent(await api.get("/api/organization/users")),
+        ),
     );
 
     server.tool(
@@ -210,19 +250,24 @@ function createEnterpriseMcpServer(authorization?: string) {
             familyName: z.string().optional().describe("The employee family name."),
             role: z.enum(["Admin", "Member", "Idp Manager", "Basic Branding Editor", "Advanced Branding Editor"]).optional(),
         },
-        async ({ email, givenName, familyName, role }) => toToolContent(await api.post("/api/organization/users", {
-            email,
-            givenName: givenName ?? "",
-            familyName: familyName ?? "",
-            role: role ?? "Member",
-        })),
+        ({ email, givenName, familyName, role }) =>
+            runTool("invite_organization_user", { email, givenName, familyName, role }, async () =>
+                toToolContent(await api.post("/api/organization/users", {
+                    email,
+                    givenName: givenName ?? "",
+                    familyName: familyName ?? "",
+                    role: role ?? "Member",
+                })),
+            ),
     );
 
     server.tool(
         "list_organization_roles",
         "List organization roles and assigned user IDs.",
         {},
-        async () => toToolContent(await api.get("/api/organization/roles")),
+        () => runTool("list_organization_roles", {}, async () =>
+            toToolContent(await api.get("/api/organization/roles")),
+        ),
     );
 
     server.tool(
@@ -233,17 +278,18 @@ function createEnterpriseMcpServer(authorization?: string) {
             to: z.string().optional().describe("Destination city, for example Los Angeles."),
             cabin: z.enum(["Economy", "Premium Economy", "Business", "First Class"]).optional(),
         },
-        async ({ from, to, cabin }) => {
-            const params = new URLSearchParams();
+        ({ from, to, cabin }) =>
+            runTool("search_enterprise_flights", { from, to, cabin }, async () => {
+                const params = new URLSearchParams();
 
-            if (from) params.set("from", from);
-            if (to) params.set("to", to);
-            if (cabin) params.set("cabin", cabin);
+                if (from) params.set("from", from);
+                if (to) params.set("to", to);
+                if (cabin) params.set("cabin", cabin);
 
-            const path = `/api/flights${params.size > 0 ? `?${params.toString()}` : ""}`;
+                const path = `/api/flights${params.size > 0 ? `?${params.toString()}` : ""}`;
 
-            return toToolContent(await api.get(path));
-        },
+                return toToolContent(await api.get(path));
+            }),
     );
 
     server.tool(
@@ -252,7 +298,9 @@ function createEnterpriseMcpServer(authorization?: string) {
         {
             all: z.boolean().optional().describe("When true, admins can list all organization bookings."),
         },
-        async ({ all }) => toToolContent(await api.get(`/api/bookings${all ? "?all=true" : ""}`)),
+        ({ all }) => runTool("list_flight_bookings", { all }, async () =>
+            toToolContent(await api.get(`/api/bookings${all ? "?all=true" : ""}`)),
+        ),
     );
 
     server.tool(
@@ -265,13 +313,16 @@ function createEnterpriseMcpServer(authorization?: string) {
             flightId: z.string().describe("The ID of the flight to book."),
             travelers: z.number().int().min(1).max(9).optional().describe("Number of travelers."),
         },
-        async ({ bookedByName, bookedForName, bookedForUserId, flightId, travelers }) => toToolContent(await api.post("/api/bookings", {
-            bookedByName: bookedByName ?? "AI-assisted user",
-            bookedForName: bookedForName ?? "",
-            bookedForUserId: bookedForUserId ?? "",
-            flightId,
-            travelers: travelers ?? 1,
-        })),
+        ({ bookedByName, bookedForName, bookedForUserId, flightId, travelers }) =>
+            runTool("create_flight_booking", { bookedForUserId, flightId, travelers }, async () =>
+                toToolContent(await api.post("/api/bookings", {
+                    bookedByName: bookedByName ?? "AI-assisted user",
+                    bookedForName: bookedForName ?? "",
+                    bookedForUserId: bookedForUserId ?? "",
+                    flightId,
+                    travelers: travelers ?? 1,
+                })),
+            ),
     );
 
     return server;
@@ -298,40 +349,54 @@ function sendJson(response: ServerResponse, statusCode: number, body: JsonValue)
     response.end(JSON.stringify(body));
 }
 
+const httpLogger = logger.child({ component: "http" });
+
 const httpServer = createServer(async (request, response) => {
+    const reqId = ++requestCounter;
+    const remoteAddr = request.socket.remoteAddress;
+    const reqLogger = httpLogger.child({ reqId });
+
+    reqLogger.info({ method: request.method, url: request.url, remoteAddr }, "incoming request");
+
     if (request.url === "/health") {
         sendJson(response, 200, { status: "ok" });
+        reqLogger.debug("health check");
 
         return;
     }
 
     if (request.url !== "/mcp") {
+        reqLogger.warn({ url: request.url }, "unknown route");
         sendJson(response, 404, { error: "Not found" });
 
         return;
     }
 
     if (request.method !== "POST") {
+        reqLogger.warn({ method: request.method }, "method not allowed");
         sendJson(response, 405, { error: "Method not allowed" });
 
         return;
     }
 
     try {
-        const server = createEnterpriseMcpServer(getAuthorizationHeader(request));
+        const server = createEnterpriseMcpServer(getAuthorizationHeader(request), reqId);
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
         });
         const body = await readJsonBody(request);
 
+        reqLogger.debug("connecting transport");
+
         response.on("close", () => {
+            reqLogger.info("connection closed");
             transport.close();
         });
 
         await server.connect(transport);
         await transport.handleRequest(request, response, body);
     } catch (error) {
-        console.error("Error handling MCP request:", error);
+        reqLogger.error({ err: error }, "unhandled error");
 
         if (!response.headersSent) {
             sendJson(response, 500, {
@@ -342,6 +407,6 @@ const httpServer = createServer(async (request, response) => {
 });
 
 httpServer.listen(port, host, () => {
-    console.log(`Wayfinder Enterprise MCP server is running at http://${host}:${port}/mcp`);
-    console.log(`Health check is available at http://${host}:${port}/health`);
+    logger.info({ url: `http://${host}:${port}/mcp` }, "MCP server listening");
+    logger.info({ url: `http://${host}:${port}/health` }, "health check available");
 });
