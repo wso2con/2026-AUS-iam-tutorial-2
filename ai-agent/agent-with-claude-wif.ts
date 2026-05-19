@@ -260,12 +260,17 @@ const agentPrompt = [
     "For any request to show, explain, use, or evaluate travel policy, call get_travel_policy before answering.",
     "If no travel policy is configured for the organization, do not block flight search or booking; treat all available flights as allowed.",
     "When a logged-out user asks to book a flight, ask for their organization name before starting delegated authorization.",
+    "Before searching for flights, always confirm the origin city, destination city, and preferred travel date with the user. Do not call search_enterprise_flights until you have at least an origin and destination from the user.",
+    "If the user expresses intent to book a flight but has not provided origin, destination, or travel date, ask for all missing details in a single follow-up message before proceeding.",
     "When a user asks to book a flight and organization context is available, start delegated authorization, then call get_current_access_context, call get_travel_policy, find the matching flight with search_enterprise_flights, and call create_flight_booking only after the flight is clear.",
     "Never call create_flight_booking in a turn where get_travel_policy has not already been called.",
     "If a booking request does not identify a single flight, ask a concise follow-up question instead of guessing.",
     "When a user asks to update a travel policy, call update_travel_policy with only the fields the user clearly asked to change.",
     "When a user asks to invite an employee, call invite_organization_user only when an email address is provided.",
-    "Keep answers concise and business-focused.",
+    "Respond in a warm, natural, and helpful tone — like a knowledgeable travel assistant, not a system report.",
+    "When presenting results, briefly acknowledge the user's request before showing data, and always end with a clear next step or question.",
+    "Use markdown formatting such as bold text, tables, and bullet points to make responses easy to read.",
+    "Never present raw data dumps; always frame results with context and a natural conversational wrap.",
     "Never show auth request IDs, access tokens, raw JSON, or other technical identifiers to the user.",
 ].join("\n");
 
@@ -714,32 +719,59 @@ function evaluateFlightPolicy(flight: Flight, policy: TravelPolicy | null): { no
 }
 
 function formatTravelPolicyAndFlights(policy: TravelPolicy | null, flights: SuggestedFlight[]) {
-    const policyText = policy
-        ? `Current travel policy: cabin up to ${policy.domestic_cabin}, max $${policy.max_flight_price}/ticket, ${policy.price_cap_percent}% over cap requires approval.`
-        : "No active travel policy is configured, so all flights are currently eligible.";
     const eligibleFlights = flights.filter((flight) => flight.policyStatus !== "out-of-policy").slice(0, 5);
 
+    const policyLine = policy
+        ? `Your organization's travel policy covers **${policy.domestic_cabin}** class up to **$${policy.max_flight_price}**/ticket (flights up to ${policy.price_cap_percent}% above the cap require manager approval).`
+        : "Your organization has no active travel policy configured, so all available flights are eligible.";
+
     if (eligibleFlights.length === 0) {
-        return `${policyText}\n\nI could not find eligible flights to suggest right now.`;
+        return `${policyLine}\n\nUnfortunately, I wasn't able to find any eligible flights at the moment. Would you like to try a different route or date?`;
     }
 
-    const flightLines = eligibleFlights.map((flight, index) => (
-        `${index + 1}. ${flight.id}: ${flight.airline}, ${flight.from_city} to ${flight.to_city}, ${flight.cabin}, $${flight.price}, ${flight.duration}, ${flight.policyStatus}`
-    ));
+    const policyBadge = (status: PolicyStatus) =>
+        status === "in-policy" ? "✓ In policy" : "⚠ Needs approval";
 
-    return `${policyText}\n\nEligible flights:\n${flightLines.join("\n")}\n\nTell me the flight number or ID you want me to book.`;
+    const rows = eligibleFlights.map((flight, index) =>
+        `| ${index + 1} | ${flight.airline} | ${flight.from_city} → ${flight.to_city} | ${flight.departure_time} | ${flight.cabin} | $${flight.price} | ${flight.duration} | ${policyBadge(flight.policyStatus)} |`
+    );
+
+    return [
+        policyLine,
+        "",
+        "Here are the available flights for your trip:",
+        "",
+        "| # | Airline | Route | Departure | Class | Price | Duration | Policy |",
+        "|---|---------|-------|-----------|-------|-------|----------|--------|",
+        ...rows,
+        "",
+        "Which flight would you like to book? Just reply with the number or flight ID.",
+    ].join("\n");
 }
 
 function formatEligibleFlightList(flights: SuggestedFlight[]) {
     const eligibleFlights = flights.filter((flight) => flight.policyStatus !== "out-of-policy").slice(0, 5);
 
     if (eligibleFlights.length === 0) {
-        return "No matching flights are available right now.";
+        return "I wasn't able to find any available flights matching your criteria right now. You can try a different route, or reach out to your travel administrator for assistance.";
     }
 
-    return eligibleFlights.map((flight, index) => (
-        `${index + 1}. ${flight.id}: ${flight.airline}, ${flight.from_city} to ${flight.to_city}, ${flight.cabin}, $${flight.price}, ${flight.duration}, ${flight.policyStatus}`
-    )).join("\n");
+    const policyBadge = (status: PolicyStatus) =>
+        status === "in-policy" ? "✓ In policy" : "⚠ Needs approval";
+
+    const rows = eligibleFlights.map((flight, index) =>
+        `| ${index + 1} | ${flight.airline} | ${flight.from_city} → ${flight.to_city} | ${flight.departure_time} | ${flight.cabin} | $${flight.price} | ${flight.duration} | ${policyBadge(flight.policyStatus)} |`
+    );
+
+    return [
+        "Here are the available flights for your trip:",
+        "",
+        "| # | Airline | Route | Departure | Class | Price | Duration | Policy |",
+        "|---|---------|-------|-----------|-------|-------|----------|--------|",
+        ...rows,
+        "",
+        "Which one would you like to book? Just reply with the number or flight ID.",
+    ].join("\n");
 }
 
 function resolveRequestedFlightId(messages: ChatMessage[], suggestedFlights: SuggestedFlight[]) {
@@ -826,6 +858,7 @@ async function exchangeOboAuthorizationCode(code: string, agentActorToken: strin
             code,
             grant_type: "authorization_code",
             redirect_uri: oboRedirectUri,
+            tokenBindingId: randomUUID(),
         }),
         headers: {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -1093,15 +1126,20 @@ async function createMcpAgent(authorization: string, mode: ChatInvocationMode): 
 
 async function getAutonomousAgentOrganizationToken(rootAgentToken: string, organizationId: string) {
     logger.info({
-        switchingOrganizationId: organizationId,
+        organizationId,
+        tokenType: "autonomous-agent",
         scopes: autonomousTravelPolicyScopes,
-    }, "Exchanging autonomous agent token for organization token");
+    }, `[org: ${organizationId}] Obtaining autonomous agent organization-scoped token`);
 
-    return exchangeOrganizationToken({
+    const token = await exchangeOrganizationToken({
         scopes: autonomousTravelPolicyScopes,
         switchingOrganizationId: organizationId,
         token: rootAgentToken,
     });
+
+    logger.info({ organizationId, tokenType: "autonomous-agent" }, `[org: ${organizationId}] Autonomous agent organization-scoped token obtained`);
+
+    return token;
 }
 
 async function getDelegatedUserOrganizationToken(accessToken: string, orgId?: string, scopes = delegatedUserOrganizationScopes) {
@@ -1110,19 +1148,26 @@ async function getDelegatedUserOrganizationToken(accessToken: string, orgId?: st
     }
 
     if (getTokenOrganizationId(accessToken) === orgId) {
+        logger.info({ organizationId: orgId }, `[org: ${orgId}] Delegated token already scoped to organization, skipping exchange`);
+
         return accessToken;
     }
 
     logger.info({
-        switchingOrganizationId: orgId,
+        organizationId: orgId,
+        tokenType: "delegated-user",
         scopes,
-    }, "Exchanging delegated user token for organization token");
+    }, `[org: ${orgId}] Obtaining delegated user organization-scoped token`);
 
-    return exchangeOrganizationToken({
+    const token = await exchangeOrganizationToken({
         scopes,
         switchingOrganizationId: orgId,
         token: accessToken,
     });
+
+    logger.info({ organizationId: orgId, tokenType: "delegated-user" }, `[org: ${orgId}] Delegated user organization-scoped token obtained`);
+
+    return token;
 }
 
 async function createRootAgentRuntime(): Promise<RootAgentRuntime> {
@@ -1165,11 +1210,19 @@ async function getTravelPolicyAndEligibleFlights(
     if (criteria.to) params.set("to", criteria.to);
 
     const flightsPath = `/api/flights${params.size > 0 ? `?${params.toString()}` : ""}`;
-    const [{ policy }, { flights }] = await Promise.all([
+    const [{ policy }, { flights }, bookingsResult] = await Promise.all([
         requestAppApi<{ policy: TravelPolicy | null }>("/api/travel-policies", organizationAccessToken),
         requestAppApi<{ flights: Flight[] }>(flightsPath, organizationAccessToken),
+        requestAppApi<{ bookings: Array<{ flight_id: string; status: string }> }>("/api/bookings?all=true", organizationAccessToken)
+            .catch(() => ({ bookings: [] })),
     ]);
+    const bookedFlightIds = new Set(
+        bookingsResult.bookings
+            .filter((b) => b.status === "confirmed")
+            .map((b) => b.flight_id)
+    );
     const evaluatedFlights = flights
+        .filter((flight) => !bookedFlightIds.has(flight.id))
         .filter((flight) => flightMatchesDepartureDate(flight, criteria.departureDate))
         .map((flight) => {
             const result = evaluateFlightPolicy(flight, policy);
@@ -1528,7 +1581,7 @@ async function runAgentServer() {
                                         sendJson(socket, {
                                             type: "authorization_required",
                                             authorizationUrl: delegation.authorizationUrl,
-                                            message: `Please approve booking flight ${flightId} by clicking the authorization link below.`,
+                                            message: `Great choice! To complete your booking, I'll need your authorization. Please click the link below to approve and finalize the reservation for **${flightId}**.`,
                                         });
 
                                         return "";
@@ -1536,7 +1589,7 @@ async function runAgentServer() {
 
                                     sendJson(socket, {
                                         type: "response",
-                                        message: "For this demo I can show travel policy and eligible flights, then book a selected flight after your authorization.",
+                                        message: "I'm here to help with your business travel! I can look up your organization's travel policy, find available flights, and book a flight for you after a quick authorization step. What would you like to do?",
                                     });
 
                                     return "";

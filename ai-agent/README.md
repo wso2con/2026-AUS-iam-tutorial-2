@@ -1,6 +1,6 @@
 # Wayfinder Enterprise AI Agent
 
-This folder contains a WebSocket-based AI agent sample that demonstrates Asgardeo agent authentication with LangChain for the B2B Next.js app.
+This folder contains an AI agent that demonstrates Asgardeo agent authentication with LangChain for the B2B Next.js app.
 
 The agent authenticates with Asgardeo using agent credentials, receives an agent access token, and can call protected B2B APIs either as itself or on behalf of the signed-in user. The chat endpoint is available only to authenticated users.
 
@@ -12,7 +12,7 @@ The agent authenticates with Asgardeo using agent credentials, receives an agent
 - Requesting delegated user authorization before creating bookings on the user's behalf
 - Passing bearer tokens to the MCP server for general tool-backed conversations
 - Loading MCP tools with `@langchain/mcp-adapters`
-- Serving a `/chat` WebSocket endpoint for enterprise travel conversations
+- Serving a `/chat` endpoint as a conversation interface 
 
 ## Local Configuration
 
@@ -33,7 +33,7 @@ Then update the values in `.env` for your local setup. The example file document
 
 ## Run Locally
 
-Start your MCP server first, then run the agent WebSocket server:
+Start your MCP server first, then run the AI agent service:
 
 ```bash
 cd ai-agent
