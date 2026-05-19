@@ -247,6 +247,8 @@ async function createModel(): Promise<ChatAnthropic> {
     return new ChatAnthropic({
         apiKey,
         model: getEnv("CLAUDE_MODEL_NAME") || getEnv("MODEL_NAME") || "claude-sonnet-4-6",
+        temperature: null,
+        topP: 1,
     });
 }
 

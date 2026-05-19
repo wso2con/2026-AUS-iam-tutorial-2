@@ -194,6 +194,8 @@ function createModel() {
             return new ChatAnthropic({
                 apiKey: getEnv("ANTHROPIC_API_KEY"),
                 model: modelName || "claude-sonnet-4-6",
+                temperature: null,
+                topP: 1,
             });
         case "deepseek":
             return new ChatOpenAI({
