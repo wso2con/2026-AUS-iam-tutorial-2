@@ -37,6 +37,7 @@ const organizationTokenScopes =
   process.env.ORG_SCOPES ??
   "internal_org_user_mgt_create internal_org_user_mgt_list internal_org_role_mgt_view internal_org_role_mgt_update";
 const userStoreName = process.env.USER_STORE_NAME ?? "DEFAULT";
+const userStoreId = Buffer.from(userStoreName).toString("base64").replace(/=+$/, "");
 const adminRoleName = process.env.NEXT_PUBLIC_ADMIN_ROLE_NAME ?? "WayFinder-Admin";
 const memberRoleName = process.env.NEXT_PUBLIC_MEMBER_ROLE_NAME ?? "WayFinder-Member";
 const pollInterval = Number(process.env.POLL_INTERVAL_MS ?? 1500);
@@ -237,9 +238,9 @@ async function waitForOrganization(accessToken: string, organizationId: string) 
   throw new Error("Timed out waiting for the workspace to become available.");
 }
 
-async function fetchDefaultUserStore(accessToken: string): Promise<boolean> {
+async function fetchUserStore(accessToken: string): Promise<boolean> {
   const config = getConfig();
-  const response = await fetch(`${config.baseUrl}/o/api/server/v1/userstores/REVGQVVMVA`, {
+  const response = await fetch(`${config.baseUrl}/o/api/server/v1/userstores/${userStoreId}`, {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${accessToken}`
@@ -315,11 +316,15 @@ async function assignRoleToUser(accessToken: string, roleId: string, userId: str
   }
 }
 
-async function waitForDefaultUserStore(accessToken: string) {
+async function waitForUserStore(accessToken: string) {
+  if (userStoreName.toUpperCase() === "PRIMARY") {
+    return;
+  }
+
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < orgReadyTimeout) {
-    const ready = await fetchDefaultUserStore(accessToken);
+    const ready = await fetchUserStore(accessToken);
 
     if (ready) {
       return;
@@ -328,7 +333,7 @@ async function waitForDefaultUserStore(accessToken: string) {
     await sleep(pollInterval);
   }
 
-  throw new Error("Timed out waiting for the user store to become available.");
+  throw new Error(`Timed out waiting for the "${userStoreName}" user store to become available.`);
 }
 
 export async function POST(request: Request) {
@@ -360,7 +365,7 @@ export async function POST(request: Request) {
       token: rootAccessToken
     });
 
-    await waitForDefaultUserStore(organizationAccessToken);
+    await waitForUserStore(organizationAccessToken);
 
     const user = await createOrganizationUserWithRetry({
       accessToken: organizationAccessToken,
