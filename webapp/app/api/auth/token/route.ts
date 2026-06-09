@@ -18,10 +18,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Authorization code is required." }, { status: 400 });
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL;
-    const clientId = process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID;
-    const clientSecret = process.env.ASGARDEO_CLIENT_SECRET;
-    const redirectUri = process.env.NEXT_PUBLIC_ASGARDEO_AFTER_SIGN_IN_URL;
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
+    const clientId = process.env.NEXT_PUBLIC_CLIENT_ID;
+    const clientSecret = process.env.CLIENT_SECRET;
+    const redirectUri = process.env.NEXT_PUBLIC_AFTER_SIGN_IN_URL;
 
     if (!baseUrl || !clientId || !clientSecret || !redirectUri) {
       return NextResponse.json({ error: "Server auth configuration is incomplete." }, { status: 500 });

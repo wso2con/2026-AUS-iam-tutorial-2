@@ -1,11 +1,11 @@
 # Wayfinder Enterprise
 
-A Next.js B2B sample app demonstrating Asgardeo IAM integration. It includes organization onboarding, role-based access control, travel policy management, flight booking, and an optional AI agent with Asgardeo agent authentication.
+A Next.js B2B sample app demonstrating WSO2 Identity Server / Asgardeo IAM integration. It includes organization onboarding, role-based access control, travel policy management, flight booking, and an optional AI agent with agent authentication.
 
 ## Prerequisites
 
 - Node.js 22 or later
-- An [Asgardeo](https://wso2.com/asgardeo/) account with a root organization
+- A [WSO2 Identity Server](https://wso2.com/identity-server/) instance or an [Asgardeo](https://wso2.com/asgardeo/) account, with a root organization
 
 ## Getting Started
 
@@ -23,18 +23,18 @@ Copy the sample environment file:
 cp .env.example .env.local
 ```
 
-Then open `.env.local` and fill in the values for your Asgardeo workspace:
+Then open `.env.local` and fill in the values for your WSO2 Identity Server / Asgardeo workspace:
 
 | Variable | Description |
 |---|---|
-| `NEXT_PUBLIC_ASGARDEO_BASE_URL` | Your Asgardeo API base URL — `https://api.asgardeo.io/t/<org-name>` |
-| `NEXT_PUBLIC_ASGARDEO_CLIENT_ID` | Client ID of your registered application |
-| `ASGARDEO_CLIENT_SECRET` | Client secret — keep this server-side only, never use the `NEXT_PUBLIC_` prefix |
-| `ASGARDEO_PARENT_ORGANIZATION_ID` | The UUID of your root Asgardeo organization |
-| `ASGARDEO_APP_ID` | The application ID from the Asgardeo Console |
-| `ASGARDEO_APP_DISPLAY_NAME` | The display name shown to users during onboarding |
+| `NEXT_PUBLIC_BASE_URL` | Your IAM provider's base URL — e.g. `https://api.asgardeo.io/t/<org-name>` (Asgardeo) or `https://localhost:9443` (WSO2 Identity Server) |
+| `NEXT_PUBLIC_CLIENT_ID` | Client ID of your registered application |
+| `CLIENT_SECRET` | Client secret — keep this server-side only, never use the `NEXT_PUBLIC_` prefix |
+| `PARENT_ORGANIZATION_ID` | The UUID of your root organization |
+| `APP_ID` | The application ID from the management console |
+| `APP_DISPLAY_NAME` | The display name shown to users during onboarding |
 
-The `NEXT_PUBLIC_ASGARDEO_SCOPES` and `ASGARDEO_ROOT_SCOPES` values in `.env.example` are pre-configured with the scopes required by the app. Update them only if you change the feature set.
+The `NEXT_PUBLIC_SCOPES` and `ROOT_SCOPES` values in `.env.example` are pre-configured with the scopes required by the app. Update them only if you change the feature set.
 
 Optionally, set `DB_PATH` to a custom SQLite file location (defaults to `data/app.db`).
 

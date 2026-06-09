@@ -20,9 +20,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL;
-    const clientId = process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID;
-    const clientSecret = process.env.ASGARDEO_CLIENT_SECRET;
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
+    const clientId = process.env.NEXT_PUBLIC_CLIENT_ID;
+    const clientSecret = process.env.CLIENT_SECRET;
 
     if (!baseUrl || !clientId || !clientSecret) {
       return NextResponse.json(

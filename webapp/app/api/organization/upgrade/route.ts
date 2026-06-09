@@ -8,19 +8,19 @@ import { logRequestActor } from "../../../lib/auth/log";
 
 const routeLogger = logger.child({ route: "organization/upgrade" });
 
-const baseUrl = (process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "").replace(/\/$/, "");
-const clientId = process.env.ASGARDEO_CLIENT_ID ?? process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID ?? "";
-const clientSecret = process.env.ASGARDEO_CLIENT_SECRET ?? "";
-const applicationId = process.env.ASGARDEO_APP_ID ?? "";
-const appDisplayName = process.env.ASGARDEO_APP_DISPLAY_NAME ?? "Wayfinder";
-const appSharingScopes = process.env.ASGARDEO_APP_SHARING_SCOPES ?? "internal_application_mgt_update";
+const baseUrl = (process.env.NEXT_PUBLIC_BASE_URL ?? "").replace(/\/$/, "");
+const clientId = process.env.CLIENT_ID ?? process.env.NEXT_PUBLIC_CLIENT_ID ?? "";
+const clientSecret = process.env.CLIENT_SECRET ?? "";
+const applicationId = process.env.APP_ID ?? "";
+const appDisplayName = process.env.APP_DISPLAY_NAME ?? "Wayfinder";
+const appSharingScopes = process.env.APP_SHARING_SCOPES ?? "internal_application_mgt_update";
 
 const basicBrandingEditorRole =
-  process.env.NEXT_PUBLIC_ASGARDEO_BASIC_BRANDING_EDITOR_ROLE_NAME ?? "Basic-Branding-Editor";
+  process.env.NEXT_PUBLIC_BASIC_BRANDING_EDITOR_ROLE_NAME ?? "Basic-Branding-Editor";
 const advancedBrandingEditorRole =
-  process.env.NEXT_PUBLIC_ASGARDEO_ADVANCED_BRANDING_EDITOR_ROLE_NAME ?? "Advanced-Branding-Editor";
+  process.env.NEXT_PUBLIC_ADVANCED_BRANDING_EDITOR_ROLE_NAME ?? "Advanced-Branding-Editor";
 const idpManagerRole =
-  process.env.NEXT_PUBLIC_ASGARDEO_IDP_MANAGER_ROLE_NAME ?? "IdP-Manager";
+  process.env.NEXT_PUBLIC_IDP_MANAGER_ROLE_NAME ?? "IdP-Manager";
 
 function getRolesForTier(tier: Tier): string[] {
   if (tier === Tier.BASIC) return [basicBrandingEditorRole];
@@ -105,7 +105,7 @@ export async function POST(request: NextRequest) {
       );
     }
   } else {
-    routeLogger.warn("ASGARDEO_APP_ID is not configured; skipping application role sharing");
+    routeLogger.warn("APP_ID is not configured; skipping application role sharing");
   }
 
   if (adminId && roles.length > 0) {
@@ -191,7 +191,7 @@ export async function DELETE(request: NextRequest) {
       );
     }
   } else {
-    routeLogger.warn("ASGARDEO_APP_ID is not configured; skipping application role removal");
+    routeLogger.warn("APP_ID is not configured; skipping application role removal");
   }
 
   upsertOrgTier(orgId, Tier.FREE);

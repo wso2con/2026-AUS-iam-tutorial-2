@@ -68,10 +68,10 @@ function isTokenExpired(token: string): boolean {
 }
 
 function buildAuthorizeUrl(options?: SignInOptions): string {
-  const baseUrl = process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "";
-  const clientId = process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID ?? "";
-  const scopes = process.env.NEXT_PUBLIC_ASGARDEO_SCOPES ?? "openid";
-  const redirectUri = process.env.NEXT_PUBLIC_ASGARDEO_AFTER_SIGN_IN_URL ?? window.location.origin;
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? "";
+  const clientId = process.env.NEXT_PUBLIC_CLIENT_ID ?? "";
+  const scopes = process.env.NEXT_PUBLIC_SCOPES ?? "openid";
+  const redirectUri = process.env.NEXT_PUBLIC_AFTER_SIGN_IN_URL ?? window.location.origin;
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -96,10 +96,10 @@ function buildAuthorizeUrl(options?: SignInOptions): string {
 }
 
 function buildImpersonateAuthorizeUrl(userId: string, orgId?: string): string {
-  const baseUrl = process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "";
-  const clientId = process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID ?? "";
-  const redirectUri = process.env.NEXT_PUBLIC_ASGARDEO_AFTER_SIGN_IN_URL ?? window.location.origin;
-  const configuredScopes = process.env.NEXT_PUBLIC_ASGARDEO_SCOPES ?? "openid";
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? "";
+  const clientId = process.env.NEXT_PUBLIC_CLIENT_ID ?? "";
+  const redirectUri = process.env.NEXT_PUBLIC_AFTER_SIGN_IN_URL ?? window.location.origin;
+  const configuredScopes = process.env.NEXT_PUBLIC_SCOPES ?? "openid";
   const nonce = Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
 
   const scopeSet = new Set(["internal_org_user_impersonate", ...configuredScopes.split(" ").filter(Boolean)]);
@@ -151,7 +151,7 @@ export function AuthProvider({ children, initialIsExchanging = false }: { childr
     setImpersonatedUserName(null);
 
     if (orgId) {
-      const afterSignInUrl = process.env.NEXT_PUBLIC_ASGARDEO_AFTER_SIGN_IN_URL ?? window.location.origin;
+      const afterSignInUrl = process.env.NEXT_PUBLIC_AFTER_SIGN_IN_URL ?? window.location.origin;
       const redirectUrl = new URL(afterSignInUrl);
       redirectUrl.searchParams.set("orgId", orgId);
       window.location.replace(redirectUrl.toString());
@@ -352,9 +352,9 @@ export function AuthProvider({ children, initialIsExchanging = false }: { childr
     setImpersonationToken(null);
     setImpersonatedUserName(null);
 
-    const baseUrl = process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "";
-    const clientId = process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID ?? "";
-    const redirectUri = process.env.NEXT_PUBLIC_ASGARDEO_AFTER_SIGN_OUT_URL ?? window.location.origin;
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? "";
+    const clientId = process.env.NEXT_PUBLIC_CLIENT_ID ?? "";
+    const redirectUri = process.env.NEXT_PUBLIC_AFTER_SIGN_OUT_URL ?? window.location.origin;
 
     if (currentIdToken && baseUrl && clientId) {
       const form = document.createElement("form");

@@ -13,9 +13,9 @@ import { logRequestActor } from "../../../lib/auth/log";
 
 const routeLogger = logger.child({ route: "organization/branding" });
 
-const baseUrl = (process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "").replace(/\/$/, "");
-const clientId = process.env.ASGARDEO_CLIENT_ID ?? process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID ?? "";
-const clientSecret = process.env.ASGARDEO_CLIENT_SECRET ?? "";
+const baseUrl = (process.env.NEXT_PUBLIC_BASE_URL ?? "").replace(/\/$/, "");
+const clientId = process.env.CLIENT_ID ?? process.env.NEXT_PUBLIC_CLIENT_ID ?? "";
+const clientSecret = process.env.CLIENT_SECRET ?? "";
 
 const HEX_RE = /^#[0-9A-Fa-f]{6}$/;
 

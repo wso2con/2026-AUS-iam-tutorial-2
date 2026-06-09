@@ -26,22 +26,22 @@ type Organization = {
 
 const ONBOARDING_ERROR_MESSAGE = "We couldn't create your organization right now. Please try again in a moment.";
 
-const baseUrl = process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL;
-const clientId = process.env.ASGARDEO_CLIENT_ID ?? process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID;
-const clientSecret = process.env.ASGARDEO_CLIENT_SECRET ?? process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_SECRET;
-const parentOrganizationId = process.env.ASGARDEO_PARENT_ORGANIZATION_ID;
+const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
+const clientId = process.env.CLIENT_ID ?? process.env.NEXT_PUBLIC_CLIENT_ID;
+const clientSecret = process.env.CLIENT_SECRET ?? process.env.NEXT_PUBLIC_CLIENT_SECRET;
+const parentOrganizationId = process.env.PARENT_ORGANIZATION_ID;
 const rootTokenScopes =
-  process.env.ASGARDEO_ROOT_SCOPES ??
+  process.env.ROOT_SCOPES ??
   "internal_organization_create internal_organization_view internal_org_user_mgt_create internal_org_user_mgt_list";
 const organizationTokenScopes =
-  process.env.ASGARDEO_ORG_SCOPES ??
+  process.env.ORG_SCOPES ??
   "internal_org_user_mgt_create internal_org_user_mgt_list internal_org_role_mgt_view internal_org_role_mgt_update";
-const userStoreName = process.env.ASGARDEO_USER_STORE_NAME ?? "DEFAULT";
-const adminRoleName = process.env.NEXT_PUBLIC_ASGARDEO_ADMIN_ROLE_NAME ?? "WayFinder-Admin";
-const memberRoleName = process.env.NEXT_PUBLIC_ASGARDEO_MEMBER_ROLE_NAME ?? "WayFinder-Member";
-const pollInterval = Number(process.env.ASGARDEO_POLL_INTERVAL_MS ?? 1500);
-const orgReadyTimeout = Number(process.env.ASGARDEO_USERSTORE_TIMEOUT_MS ?? 30000);
-const userCreationRetryTimeout = Number(process.env.ASGARDEO_USER_CREATION_RETRY_TIMEOUT_MS ?? 30000);
+const userStoreName = process.env.USER_STORE_NAME ?? "DEFAULT";
+const adminRoleName = process.env.NEXT_PUBLIC_ADMIN_ROLE_NAME ?? "WayFinder-Admin";
+const memberRoleName = process.env.NEXT_PUBLIC_MEMBER_ROLE_NAME ?? "WayFinder-Member";
+const pollInterval = Number(process.env.POLL_INTERVAL_MS ?? 1500);
+const orgReadyTimeout = Number(process.env.USERSTORE_TIMEOUT_MS ?? 30000);
+const userCreationRetryTimeout = Number(process.env.USER_CREATION_RETRY_TIMEOUT_MS ?? 30000);
 
 function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
