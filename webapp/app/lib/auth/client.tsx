@@ -10,6 +10,9 @@ interface SignInOptions {
   orgId?: string;
 }
 
+const enhancedOrgAuthEnabled =
+  (process.env.NEXT_PUBLIC_ENHANCED_ORGANIZATION_AUTHENTICATION ?? "").toLowerCase() === "true";
+
 interface AuthState {
   isLoading: boolean;
   isSignedIn: boolean;
@@ -80,7 +83,7 @@ function buildAuthorizeUrl(options?: SignInOptions): string {
     scope: scopes
   });
 
-  if (options?.fidp) {
+  if (options?.fidp && !enhancedOrgAuthEnabled) {
     params.set("fidp", options.fidp);
   }
 
@@ -112,9 +115,12 @@ function buildImpersonateAuthorizeUrl(userId: string, orgId?: string): string {
     requested_subject: userId,
     state: "impersonating",
     nonce,
-    fidp: "OrganizationSSO",
     orgId: orgId ?? "",
   });
+
+  if (!enhancedOrgAuthEnabled) {
+    params.set("fidp", "OrganizationSSO");
+  }
 
   return `${baseUrl}/oauth2/authorize?${params.toString()}`;
 }
