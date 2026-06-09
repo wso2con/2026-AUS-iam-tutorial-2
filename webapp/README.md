@@ -34,6 +34,7 @@ Then open `.env.local` and fill in the values for your WSO2 Identity Server / As
 | `APP_ID` | The application ID from the management console |
 | `APP_DISPLAY_NAME` | The display name shown to users during onboarding |
 | `NEXT_PUBLIC_ENHANCED_ORGANIZATION_AUTHENTICATION` | Set to `true` if **Enhanced organization authentication** is enabled for the application (Application → Edit → **Shared Access** tab). Defaults to `false`. |
+| `NEXT_PUBLIC_ORGANIZATION_HANDLE_SUPPORTED` | Set to `true` if your IAM provider supports organization handles. When enabled, the onboarding wizard collects an organization handle and sends it as `orgHandle` when creating the organization. Defaults to `false`. |
 
 The `NEXT_PUBLIC_SCOPES` and `ROOT_SCOPES` values in `.env.example` are pre-configured with the scopes required by the app. Update them only if you change the feature set.
 

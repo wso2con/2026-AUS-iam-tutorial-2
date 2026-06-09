@@ -8,6 +8,7 @@ type OnboardingRequest = {
   familyName?: string;
   givenName?: string;
   organizationName?: string;
+  organizationHandle?: string;
   password?: string;
 };
 
@@ -36,6 +37,7 @@ const rootTokenScopes =
 const organizationTokenScopes =
   process.env.ORG_SCOPES ??
   "internal_org_user_mgt_create internal_org_user_mgt_list internal_org_role_mgt_view internal_org_role_mgt_update";
+const orgHandleSupported = (process.env.NEXT_PUBLIC_ORGANIZATION_HANDLE_SUPPORTED ?? "").toLowerCase() === "true";
 const userStoreName = process.env.USER_STORE_NAME ?? "DEFAULT";
 const userStoreId = Buffer.from(userStoreName).toString("base64").replace(/=+$/, "");
 const adminRoleName = process.env.NEXT_PUBLIC_ADMIN_ROLE_NAME ?? "WayFinder-Admin";
@@ -90,12 +92,13 @@ async function getToken(params: Record<string, string>) {
   return body.access_token;
 }
 
-async function createOrganization(accessToken: string, name: string): Promise<Organization> {
+async function createOrganization(accessToken: string, name: string, orgHandle?: string): Promise<Organization> {
   const config = getConfig();
   const response = await fetch(`${config.baseUrl}/api/server/v1/organizations`, {
     body: JSON.stringify({
       description: `Workspace for ${name}`,
       name,
+      ...(orgHandle ? { orgHandle } : {}),
       parentId: config.parentOrganizationId,
       type: "TENANT"
     }),
@@ -343,9 +346,14 @@ export async function POST(request: Request) {
     const familyName = asText(payload.familyName);
     const givenName = asText(payload.givenName);
     const organizationName = asText(payload.organizationName);
+    const organizationHandle = asText(payload.organizationHandle);
     const password = asText(payload.password) || undefined;
 
     if (!email || !givenName || !familyName || !organizationName) {
+      return NextResponse.json({ message: "All onboarding fields are required." }, { status: 400 });
+    }
+
+    if (orgHandleSupported && !organizationHandle) {
       return NextResponse.json({ message: "All onboarding fields are required." }, { status: 400 });
     }
 
@@ -354,7 +362,11 @@ export async function POST(request: Request) {
       scope: rootTokenScopes
     });
 
-    const organization = await createOrganization(rootAccessToken, organizationName);
+    const organization = await createOrganization(
+      rootAccessToken,
+      organizationName,
+      orgHandleSupported ? organizationHandle : undefined
+    );
 
     await waitForOrganization(rootAccessToken, organization.id);
 

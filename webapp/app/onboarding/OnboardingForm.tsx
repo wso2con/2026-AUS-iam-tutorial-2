@@ -22,6 +22,7 @@ type FormState = {
   familyName: string;
   givenName: string;
   organizationName: string;
+  organizationHandle: string;
   password: string;
 };
 
@@ -29,11 +30,15 @@ type FormErrors = Partial<Record<keyof FormState, string>>;
 
 const ONBOARDING_ERROR_MESSAGE = "We couldn't create your organization right now. Please try again in a moment.";
 
+const orgHandleSupported =
+  (process.env.NEXT_PUBLIC_ORGANIZATION_HANDLE_SUPPORTED ?? "").toLowerCase() === "true";
+
 const FIELD_LABELS: Record<keyof FormState, string> = {
   email: "Work email",
   familyName: "Last name",
   givenName: "First name",
   organizationName: "Organization name",
+  organizationHandle: "Organization handle",
   password: "Password"
 };
 
@@ -42,6 +47,7 @@ const initialForm: FormState = {
   familyName: "",
   givenName: "",
   organizationName: "",
+  organizationHandle: "",
   password: ""
 };
 
@@ -49,6 +55,10 @@ function validate(form: FormState): FormErrors {
   const errors: FormErrors = {};
 
   for (const key of Object.keys(form) as (keyof FormState)[]) {
+    if (key === "organizationHandle" && !orgHandleSupported) {
+      continue;
+    }
+
     if (!form[key].trim()) {
       errors[key] = `${FIELD_LABELS[key]} is required.`;
     }
@@ -107,8 +117,9 @@ export default function OnboardingForm() {
 
     try {
       setStepStatus(0, "active");
+      const { organizationHandle, ...rest } = form;
       const response = await fetch("/api/onboarding", {
-        body: JSON.stringify(form),
+        body: JSON.stringify(orgHandleSupported ? form : rest),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
@@ -222,6 +233,16 @@ export default function OnboardingForm() {
           value={form.organizationName}
         />
       </label>
+      {orgHandleSupported ? (
+        <label>
+          <span>Organization handle<span className="required-mark">*</span></span>
+          <input
+            className={errors.organizationHandle ? "input--error" : ""}
+            onChange={(event) => updateField("organizationHandle", event.target.value)}
+            value={form.organizationHandle}
+          />
+        </label>
+      ) : null}
       <button className="button button-primary" type="submit">
         Create organization
       </button>
