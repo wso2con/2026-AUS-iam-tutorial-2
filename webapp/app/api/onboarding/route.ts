@@ -8,6 +8,7 @@ type OnboardingRequest = {
   familyName?: string;
   givenName?: string;
   organizationName?: string;
+  organizationHandle?: string;
   password?: string;
 };
 
@@ -26,22 +27,24 @@ type Organization = {
 
 const ONBOARDING_ERROR_MESSAGE = "We couldn't create your organization right now. Please try again in a moment.";
 
-const baseUrl = process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL;
-const clientId = process.env.ASGARDEO_CLIENT_ID ?? process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_ID;
-const clientSecret = process.env.ASGARDEO_CLIENT_SECRET ?? process.env.NEXT_PUBLIC_ASGARDEO_CLIENT_SECRET;
-const parentOrganizationId = process.env.ASGARDEO_PARENT_ORGANIZATION_ID;
+const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
+const clientId = process.env.CLIENT_ID ?? process.env.NEXT_PUBLIC_CLIENT_ID;
+const clientSecret = process.env.CLIENT_SECRET ?? process.env.NEXT_PUBLIC_CLIENT_SECRET;
+const parentOrganizationId = process.env.PARENT_ORGANIZATION_ID;
 const rootTokenScopes =
-  process.env.ASGARDEO_ROOT_SCOPES ??
+  process.env.ROOT_SCOPES ??
   "internal_organization_create internal_organization_view internal_org_user_mgt_create internal_org_user_mgt_list";
 const organizationTokenScopes =
-  process.env.ASGARDEO_ORG_SCOPES ??
+  process.env.ORG_SCOPES ??
   "internal_org_user_mgt_create internal_org_user_mgt_list internal_org_role_mgt_view internal_org_role_mgt_update";
-const userStoreName = process.env.ASGARDEO_USER_STORE_NAME ?? "DEFAULT";
-const adminRoleName = process.env.NEXT_PUBLIC_ASGARDEO_ADMIN_ROLE_NAME ?? "WayFinder-Admin";
-const memberRoleName = process.env.NEXT_PUBLIC_ASGARDEO_MEMBER_ROLE_NAME ?? "WayFinder-Member";
-const pollInterval = Number(process.env.ASGARDEO_POLL_INTERVAL_MS ?? 1500);
-const orgReadyTimeout = Number(process.env.ASGARDEO_USERSTORE_TIMEOUT_MS ?? 30000);
-const userCreationRetryTimeout = Number(process.env.ASGARDEO_USER_CREATION_RETRY_TIMEOUT_MS ?? 30000);
+const orgHandleSupported = (process.env.NEXT_PUBLIC_ORGANIZATION_HANDLE_SUPPORTED ?? "").toLowerCase() === "true";
+const userStoreName = process.env.USER_STORE_NAME ?? "DEFAULT";
+const userStoreId = Buffer.from(userStoreName).toString("base64").replace(/=+$/, "");
+const adminRoleName = process.env.NEXT_PUBLIC_ADMIN_ROLE_NAME ?? "WayFinder-Admin";
+const memberRoleName = process.env.NEXT_PUBLIC_MEMBER_ROLE_NAME ?? "WayFinder-Member";
+const pollInterval = Number(process.env.POLL_INTERVAL_MS ?? 1500);
+const orgReadyTimeout = Number(process.env.USERSTORE_TIMEOUT_MS ?? 30000);
+const userCreationRetryTimeout = Number(process.env.USER_CREATION_RETRY_TIMEOUT_MS ?? 30000);
 
 function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -89,12 +92,13 @@ async function getToken(params: Record<string, string>) {
   return body.access_token;
 }
 
-async function createOrganization(accessToken: string, name: string): Promise<Organization> {
+async function createOrganization(accessToken: string, name: string, orgHandle?: string): Promise<Organization> {
   const config = getConfig();
   const response = await fetch(`${config.baseUrl}/api/server/v1/organizations`, {
     body: JSON.stringify({
       description: `Workspace for ${name}`,
       name,
+      ...(orgHandle ? { orgHandle } : {}),
       parentId: config.parentOrganizationId,
       type: "TENANT"
     }),
@@ -237,9 +241,9 @@ async function waitForOrganization(accessToken: string, organizationId: string) 
   throw new Error("Timed out waiting for the workspace to become available.");
 }
 
-async function fetchDefaultUserStore(accessToken: string): Promise<boolean> {
+async function fetchUserStore(accessToken: string): Promise<boolean> {
   const config = getConfig();
-  const response = await fetch(`${config.baseUrl}/o/api/server/v1/userstores/REVGQVVMVA`, {
+  const response = await fetch(`${config.baseUrl}/o/api/server/v1/userstores/${userStoreId}`, {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${accessToken}`
@@ -315,11 +319,15 @@ async function assignRoleToUser(accessToken: string, roleId: string, userId: str
   }
 }
 
-async function waitForDefaultUserStore(accessToken: string) {
+async function waitForUserStore(accessToken: string) {
+  if (userStoreName.toUpperCase() === "PRIMARY") {
+    return;
+  }
+
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < orgReadyTimeout) {
-    const ready = await fetchDefaultUserStore(accessToken);
+    const ready = await fetchUserStore(accessToken);
 
     if (ready) {
       return;
@@ -328,7 +336,7 @@ async function waitForDefaultUserStore(accessToken: string) {
     await sleep(pollInterval);
   }
 
-  throw new Error("Timed out waiting for the user store to become available.");
+  throw new Error(`Timed out waiting for the "${userStoreName}" user store to become available.`);
 }
 
 export async function POST(request: Request) {
@@ -338,9 +346,14 @@ export async function POST(request: Request) {
     const familyName = asText(payload.familyName);
     const givenName = asText(payload.givenName);
     const organizationName = asText(payload.organizationName);
+    const organizationHandle = asText(payload.organizationHandle);
     const password = asText(payload.password) || undefined;
 
     if (!email || !givenName || !familyName || !organizationName) {
+      return NextResponse.json({ message: "All onboarding fields are required." }, { status: 400 });
+    }
+
+    if (orgHandleSupported && !organizationHandle) {
       return NextResponse.json({ message: "All onboarding fields are required." }, { status: 400 });
     }
 
@@ -349,7 +362,11 @@ export async function POST(request: Request) {
       scope: rootTokenScopes
     });
 
-    const organization = await createOrganization(rootAccessToken, organizationName);
+    const organization = await createOrganization(
+      rootAccessToken,
+      organizationName,
+      orgHandleSupported ? organizationHandle : undefined
+    );
 
     await waitForOrganization(rootAccessToken, organization.id);
 
@@ -360,7 +377,7 @@ export async function POST(request: Request) {
       token: rootAccessToken
     });
 
-    await waitForDefaultUserStore(organizationAccessToken);
+    await waitForUserStore(organizationAccessToken);
 
     const user = await createOrganizationUserWithRetry({
       accessToken: organizationAccessToken,

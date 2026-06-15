@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
   try {
     const idp = await idpCreate(accessToken, config);
 
-    const appName = process.env.ASGARDEO_APP_DISPLAY_NAME;
+    const appName = process.env.APP_DISPLAY_NAME;
     if (appName) {
       const appId = await appGetIdByName(accessToken, appName);
       if (appId) {
@@ -144,7 +144,7 @@ export async function DELETE(request: NextRequest) {
   const accessToken = request.headers.get("authorization")!.slice(7);
 
   try {
-    const appName = process.env.ASGARDEO_APP_DISPLAY_NAME;
+    const appName = process.env.APP_DISPLAY_NAME;
     if (appName) {
       const appId = await appGetIdByName(accessToken, appName);
       if (appId) {

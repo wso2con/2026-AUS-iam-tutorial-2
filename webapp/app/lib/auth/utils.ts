@@ -40,11 +40,11 @@ export enum UserRole {
   ADVANCED_BRANDING_EDITOR = "Advanced Branding Editor",
 }
 
-const ROLE_NAME_ADMIN = process.env.NEXT_PUBLIC_ASGARDEO_ADMIN_ROLE_NAME ?? "WayFinder-Admin";
-const ROLE_NAME_MEMBER = process.env.NEXT_PUBLIC_ASGARDEO_MEMBER_ROLE_NAME ?? "WayFinder-Member";
-const ROLE_NAME_IDP_MANAGER = process.env.NEXT_PUBLIC_ASGARDEO_IDP_MANAGER_ROLE_NAME ?? "IdP-Manager";
-const ROLE_NAME_BASIC_BRANDING_EDITOR = process.env.NEXT_PUBLIC_ASGARDEO_BASIC_BRANDING_EDITOR_ROLE_NAME ?? "Basic-Branding-Editor";
-const ROLE_NAME_ADVANCED_BRANDING_EDITOR = process.env.NEXT_PUBLIC_ASGARDEO_ADVANCED_BRANDING_EDITOR_ROLE_NAME ?? "Advanced-Branding-Editor";
+const ROLE_NAME_ADMIN = process.env.NEXT_PUBLIC_ADMIN_ROLE_NAME ?? "WayFinder-Admin";
+const ROLE_NAME_MEMBER = process.env.NEXT_PUBLIC_MEMBER_ROLE_NAME ?? "WayFinder-Member";
+const ROLE_NAME_IDP_MANAGER = process.env.NEXT_PUBLIC_IDP_MANAGER_ROLE_NAME ?? "IdP-Manager";
+const ROLE_NAME_BASIC_BRANDING_EDITOR = process.env.NEXT_PUBLIC_BASIC_BRANDING_EDITOR_ROLE_NAME ?? "Basic-Branding-Editor";
+const ROLE_NAME_ADVANCED_BRANDING_EDITOR = process.env.NEXT_PUBLIC_ADVANCED_BRANDING_EDITOR_ROLE_NAME ?? "Advanced-Branding-Editor";
 
 export const ASGARDEO_ROLE_TO_USER_ROLE: Record<string, UserRole> = {
   [ROLE_NAME_ADMIN]: UserRole.ADMIN,

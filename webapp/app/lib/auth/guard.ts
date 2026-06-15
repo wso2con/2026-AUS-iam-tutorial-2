@@ -12,7 +12,7 @@ let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
 function getJWKS() {
   if (!_jwks) {
-    const baseUrl = (process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL ?? "").replace(/\/$/, "");
+    const baseUrl = (process.env.NEXT_PUBLIC_BASE_URL ?? "").replace(/\/$/, "");
     _jwks = createRemoteJWKSet(new URL(`${baseUrl}/oauth2/jwks`));
   }
   return _jwks;
