@@ -247,11 +247,11 @@ The AI agent authenticates with Asgardeo to call B2B APIs autonomously and on be
 
 #### Enable App-Native Authentication
 
-1. Open the **Advanced** tab of the application.
+1. Open the **Advanced** tab of the registered B2B SaaS application.
 2. Under **App-Native Authentication**, enable **Enable app-native authentication API**.
 3. Click **Update**.
 
-#### Create the AI Agent
+#### Register the AI Agent
 
 1. Navigate to **Agents** in the Asgardeo Console.
 2. Click **New Agent**.
@@ -260,11 +260,22 @@ The AI agent authenticates with Asgardeo to call B2B APIs autonomously and on be
    - **Description:** AI agent for the Wayfinder Enterprise B2B platform
 4. Click **Create**.
 5. Note the **Agent ID** and **Agent Secret** from the created agent.
-6. Navigate to the **Wayfinder** application and open the **Protocol** tab.
+6. Navigate to the **Wayfinder** B2B SaaS application and open the **Protocol** tab.
 7. Add `http://localhost:8791` and `http://localhost:8791/obo/callback` as **Authorized Redirect URLs**.
 8. Add `http://localhost:8791` to **Allowed Origins**.
 9. Note the **Client ID** and **Client Secret** of the application.
 10. Click **Update**.
+
+#### Share the AI agent with B2B organizations
+
+The organization administrator can choose which B2B organizations should have access to the AI agent.
+
+To configure the AI agent access to a B2B organization,
+
+1. Navigate to **Agents**, and select the registered AI agent.
+2. In the edit view, navigate to the **Shared Access** tab.
+3. Select the sharing option, depending on the requirement.
+4. Optionally select the roles that should be assigned to the AI agent in the B2B organizations.
 
 #### Register the MCP Server
 
