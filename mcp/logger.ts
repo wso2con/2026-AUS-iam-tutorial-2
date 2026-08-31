@@ -17,6 +17,15 @@ limitations under the License.
 export type LogLevel = "debug" | "info" | "warn" | "error" | "fatal";
 export type LogContext = Record<string, unknown>;
 
+const ANSI_RED = "\x1b[31m";
+const ANSI_GREEN = "\x1b[32m";
+const ANSI_RESET = "\x1b[0m";
+
+export const ansiColor = {
+    green: (text: string) => `${ANSI_GREEN}${text}${ANSI_RESET}`,
+    red: (text: string) => `${ANSI_RED}${text}${ANSI_RESET}`,
+};
+
 const LOG_LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40, fatal: 50 };
 
 function normalizeLogLevel(value: string | undefined): LogLevel {
@@ -72,7 +81,7 @@ export function createLogger(context: LogContext = {}) {
         const message = typeof first === "string" ? first : second || "";
         const childContext = typeof first === "string" ? {} : first;
         const line = `${new Date().toISOString()} ${level.toUpperCase()} ${message}${formatLogContext({ ...context, ...childContext })}`;
-        if (level === "warn") console.warn(line);
+        if (level === "warn") console.warn(ansiColor.red(line));
         else if (level === "error" || level === "fatal") console.error(line);
         else console.log(line);
     }

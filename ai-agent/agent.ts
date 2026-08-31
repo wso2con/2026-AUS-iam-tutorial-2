@@ -156,26 +156,10 @@ const agentConfig = {
     agentSecret: getEnv("AGENT_SECRET"),
 };
 
-const DEFAULT_ORGANIZATION_API_SCOPES = [
-    "openid",
-    "internal_org_user_mgt_create",
-    "internal_org_user_mgt_list",
-    "internal_org_user_mgt_update",
-    "internal_org_role_mgt_view",
-    "internal_org_role_mgt_users_update",
-    "create_travel_policy",
-    "view_travel_policy",
-    "update_travel_policy",
-    "delete_travel_policy",
-    "view_booking",
-    "create_booking",
-    "delete_booking",
-].join(" ");
 
 const appBaseUrl = (getEnv("APP_BASE_URL") || "http://localhost:3000").replace(/\/$/, "");
-const autonomousTravelPolicyScopes = getEnv("AGENT_TRAVEL_POLICY_SCOPES") || "view_travel_policy";
-const delegatedBookingScopes = getEnv("DELEGATED_BOOKING_SCOPES") || "create_booking";
-const delegatedUserOrganizationScopes = getEnv("DELEGATED_USER_ORG_SCOPES") || DEFAULT_ORGANIZATION_API_SCOPES;
+const autonomousTravelPolicyScopes = getEnv("AGENT_TRAVEL_POLICY_SCOPES") || "mcp:view_travel_policy";
+const delegatedBookingScopes = getEnv("DELEGATED_BOOKING_SCOPES") || "mcp:create_booking mcp:view_travel_policy";
 const oboRedirectUri = getEnv("OBO_REDIRECT_URI") || new URL("/obo/callback", asgardeoConfig.afterSignInUrl).toString();
 const oboResource = getEnv("OBO_RESOURCE");
 const oboRequiredMessage = "I need your authorization to perform this action. Please click the Authorize button to grant me access.";
@@ -581,44 +565,6 @@ function addContextToFirstUserMessage(messages: ChatMessage[], context: string):
     });
 }
 
-async function requestAppApi<T>(path: string, accessToken: string, options: RequestInit = {}): Promise<T> {
-    const headers = new Headers(options.headers);
-
-    headers.set("Accept", "application/json");
-    headers.set("Authorization", `Bearer ${accessToken}`);
-
-    if (options.body && !headers.has("Content-Type")) {
-        headers.set("Content-Type", "application/json");
-    }
-
-    logger.info({
-        method: options.method ?? "GET",
-        path,
-    }, "Agent direct app API request");
-
-    const response = await fetch(`${appBaseUrl}${path}`, {
-        ...options,
-        headers,
-        signal: AbortSignal.timeout(30000),
-    });
-    const contentType = response.headers.get("content-type") || "";
-    const body = contentType.includes("application/json")
-        ? await response.json().catch(() => ({}))
-        : await response.text();
-
-    logger.info({
-        method: options.method ?? "GET",
-        path,
-        statusCode: response.status,
-    }, "Agent direct app API response");
-
-    if (!response.ok) {
-        throw new Error(`App API request failed with ${response.status}: ${JSON.stringify(body)}`);
-    }
-
-    return body as T;
-}
-
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, description: string): Promise<T> {
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
@@ -770,37 +716,6 @@ function evaluateFlightPolicy(flight: Flight, policy: TravelPolicy | null): { no
     return { notes: [], status: "in-policy" };
 }
 
-function formatTravelPolicyAndFlights(policy: TravelPolicy | null, flights: SuggestedFlight[]) {
-    const eligibleFlights = flights.filter((flight) => flight.policyStatus !== "out-of-policy").slice(0, 5);
-
-    const policyLine = policy
-        ? `Your organization's travel policy covers **${policy.domestic_cabin}** class up to **$${policy.max_flight_price}**/ticket (flights up to ${policy.price_cap_percent}% above the cap require manager approval).`
-        : "Your organization has no active travel policy configured, so all available flights are eligible.";
-
-    if (eligibleFlights.length === 0) {
-        return `${policyLine}\n\nUnfortunately, I wasn't able to find any eligible flights at the moment. Would you like to try a different route or date?`;
-    }
-
-    const policyBadge = (status: PolicyStatus) =>
-        status === "in-policy" ? "✓ In policy" : "⚠ Needs approval";
-
-    const rows = eligibleFlights.map((flight, index) =>
-        `| ${index + 1} | ${flight.airline} | ${flight.from_city} → ${flight.to_city} | ${flight.departure_time} | ${flight.cabin} | $${flight.price} | ${flight.duration} | ${policyBadge(flight.policyStatus)} |`
-    );
-
-    return [
-        policyLine,
-        "",
-        "Here are the available flights for your trip:",
-        "",
-        "| # | Airline | Route | Departure | Class | Price | Duration | Policy |",
-        "|---|---------|-------|-----------|-------|-------|----------|--------|",
-        ...rows,
-        "",
-        "Which flight would you like to book? Just reply with the number or flight ID.",
-    ].join("\n");
-}
-
 
 const pendingDelegations = new Map<string, PendingDelegation>();
 
@@ -862,6 +777,11 @@ async function exchangeOboAuthorizationCode(code: string, agentActorToken: strin
     if (!response.ok || !body.access_token) {
         throw new Error(body.error_description ?? body.error ?? "Failed to exchange the OBO authorization code.");
     }
+
+    // log OBO token payload for debugging purposes
+    const payload = decodeJwtPayload(body.access_token);
+    console.log("Decoded OBO token payload:", payload);
+    logger.debug({ oboTokenPayload: payload }, "Decoded OBO token payload");
 
     return body.access_token;
 }
@@ -1212,7 +1132,7 @@ async function getAutonomousAgentOrganizationToken(rootAgentToken: string, organ
     return token;
 }
 
-async function getDelegatedUserOrganizationToken(accessToken: string, orgId?: string, scopes = delegatedUserOrganizationScopes) {
+async function getDelegatedUserOrganizationToken(accessToken: string, orgId?: string, scopes = delegatedBookingScopes) {
     if (!orgId) {
         return accessToken;
     }
@@ -1265,58 +1185,6 @@ async function createAutonomousAgentRuntime(rootRuntime: RootAgentRuntime, organ
     return createMcpAgent(`Bearer ${organizationAccessToken}`, "agent");
 }
 
-async function getTravelPolicyAndEligibleFlights(
-    rootRuntime: RootAgentRuntime,
-    organizationId: string,
-    criteria: BookingSearchCriteria = {}
-) {
-    const organizationAccessToken = await getAutonomousAgentOrganizationToken(rootRuntime.agentActorToken, organizationId);
-    const params = new URLSearchParams();
-
-    if (criteria.from) params.set("from", criteria.from);
-    if (criteria.to) params.set("to", criteria.to);
-
-    const flightsPath = `/api/flights${params.size > 0 ? `?${params.toString()}` : ""}`;
-    const [{ policy }, { flights }, bookingsResult] = await Promise.all([
-        requestAppApi<{ policy: TravelPolicy | null }>("/api/travel-policies", organizationAccessToken),
-        requestAppApi<{ flights: Flight[] }>(flightsPath, organizationAccessToken),
-        requestAppApi<{ bookings: Array<{ flight_id: string; status: string }> }>("/api/bookings?all=true", organizationAccessToken)
-            .catch(() => ({ bookings: [] })),
-    ]);
-    const bookedFlightIds = new Set(
-        bookingsResult.bookings
-            .filter((b) => b.status === "confirmed")
-            .map((b) => b.flight_id)
-    );
-    const evaluatedFlights = flights
-        .filter((flight) => !bookedFlightIds.has(flight.id))
-        .filter((flight) => flightMatchesDepartureDate(flight, criteria.departureDate))
-        .map((flight) => {
-            const result = evaluateFlightPolicy(flight, policy);
-
-            return {
-                ...flight,
-                policyNotes: result.notes,
-                policyStatus: result.status,
-            };
-        })
-        .sort((left, right) => {
-            const statusRank: Record<PolicyStatus, number> = {
-                "in-policy": 0,
-                "approval-required": 1,
-                "out-of-policy": 2,
-            };
-
-            return statusRank[left.policyStatus] - statusRank[right.policyStatus] || left.price - right.price;
-        });
-
-    return {
-        flights: evaluatedFlights,
-        message: formatTravelPolicyAndFlights(policy, evaluatedFlights),
-        policy,
-    };
-}
-
 
 async function invokeWithDelegatedUserAccess(request: ParsedChatRequest, delegatedAccessToken: string) {
     logger.info({
@@ -1346,31 +1214,6 @@ async function invokeWithDelegatedUserAccess(request: ParsedChatRequest, delegat
         await runtime.client.close();
         logger.info("Delegated MCP client closed");
     }
-}
-
-async function createBookingWithDelegatedUserAccess(pending: PendingDelegation, delegatedAccessToken: string) {
-    if (!pending.flightId) {
-        throw new Error("No flight was selected for booking.");
-    }
-
-    const accessToken = await getDelegatedUserOrganizationToken(
-        delegatedAccessToken,
-        pending.orgId,
-        delegatedBookingScopes
-    );
-    const bookingResponse = await requestAppApi<{ booking?: { booking_reference?: string } }>("/api/bookings", accessToken, {
-        body: JSON.stringify({
-            bookedByName: "AI-assisted user",
-            flightId: pending.flightId,
-            travelers: 1,
-        }),
-        method: "POST",
-    });
-    const reference = bookingResponse.booking?.booking_reference;
-
-    return reference
-        ? `Booked flight ${pending.flightId}. Booking reference: ${reference}.`
-        : `Booked flight ${pending.flightId}.`;
 }
 
 function registerPendingDelegation(
@@ -1509,9 +1352,7 @@ async function handleOboCallback(url: URL, response: ServerResponse, agentActorT
         const delegatedAccessToken = await exchangeOboAuthorizationCode(code, agentActorToken);
         logger.info("Delegated access token received from OBO callback");
 
-        const responseMessage = pending.flightId
-            ? await createBookingWithDelegatedUserAccess(pending, delegatedAccessToken)
-            : await invokeWithDelegatedUserAccess(pending.request, delegatedAccessToken);
+        const responseMessage = await invokeWithDelegatedUserAccess(pending.request, delegatedAccessToken);
         logger.info({
             responseLength: responseMessage.length,
             socketWritable: isSocketWritable(pending.socket),
@@ -1694,7 +1535,7 @@ async function runAgentServer() {
                                         socket,
                                         chatRequest,
                                         undefined,
-                                        delegatedUserOrganizationScopes
+                                        delegatedBookingScopes
                                     );
 
                                     sendJson(socket, {
@@ -1722,7 +1563,7 @@ async function runAgentServer() {
                                     socket,
                                     chatRequest,
                                     undefined,
-                                    delegatedUserOrganizationScopes
+                                    delegatedBookingScopes
                                 );
 
                                 sendJson(socket, {

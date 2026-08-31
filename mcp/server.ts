@@ -15,13 +15,21 @@ limitations under the License.
 */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { createLogger } from "./logger.js";
+import { ansiColor, createLogger } from "./logger.js";
+import {
+    getRolesFromPermissions,
+    Scope,
+    UserRole,
+} from "../webapp/app/lib/auth/utils.js";
+import type { TravelPolicy } from "../webapp/app/lib/db/queries/travel-policies.js";
 
 let requestCounter = 0;
 
@@ -59,22 +67,112 @@ function loadEnvFile(filePath: string) {
     }
 }
 
-loadEnvFile(resolve(__dirname, ".env"));
+const webappDir = resolve(__dirname, "../webapp");
 
-const appBaseUrl = (process.env.APP_BASE_URL || "http://localhost:3000").replace(/\/$/, "");
+loadEnvFile(resolve(__dirname, ".env"));
+loadEnvFile(resolve(webappDir, ".env.local"));
+
+if (!process.env.DB_PATH) {
+    process.env.DB_PATH = resolve(webappDir, "data", "app.db");
+}
+
+// app/lib/db/connection.ts resolves its schema path relative to process.cwd(),
+// so the webapp's working directory has to be active before that module loads.
+process.chdir(webappDir);
+
 const port = Number(process.env.PORT || process.env.MCP_PORT || 8001);
 const host = process.env.HOST || "localhost";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-class ApiRequestError extends Error {
+async function importWebappModule<T>(relativePath: string): Promise<T> {
+    return import(pathToFileURL(resolve(webappDir, relativePath)).href) as Promise<T>;
+}
+
+const { getTravelPolicy, upsertTravelPolicy } = await importWebappModule<
+    typeof import("../webapp/app/lib/db/queries/travel-policies.js")
+>("app/lib/db/queries/travel-policies.ts");
+
+const { listFlights, getFlightById } = await importWebappModule<
+    typeof import("../webapp/app/lib/db/queries/flights.js")
+>("app/lib/db/queries/flights.ts");
+
+const { listOrgBookings, listMyOrgBookings, findDuplicateOrgBooking, createOrgBooking } = await importWebappModule<
+    typeof import("../webapp/app/lib/db/queries/bookings.js")
+>("app/lib/db/queries/bookings.ts");
+
+interface TokenClaims {
+    orgId: string;
+    scopes: string[];
+    sub: string;
+    roles: string[];
+}
+
+class AuthError extends Error {
     constructor(
         message: string,
         readonly statusCode: number,
-        readonly body: JsonValue,
     ) {
         super(message);
-        this.name = "ApiRequestError";
+        this.name = "AuthError";
+    }
+}
+
+let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+function getJwks() {
+    if (!jwks) {
+        const baseUrl = (process.env.NEXT_PUBLIC_ASGARDEO_BASE_URL || "").replace(/\/$/, "");
+        jwks = createRemoteJWKSet(new URL(`${baseUrl}/oauth2/jwks`));
+    }
+
+    return jwks;
+}
+
+// Mirrors webapp/app/lib/auth/guard.ts requireAuth/requireScope, since calling
+// the service functions directly skips the route handlers that normally do this.
+async function verifyClaims(authorization?: string): Promise<TokenClaims> {
+    const token = getBearerToken(authorization);
+
+    if (!token) {
+        throw new AuthError("Missing authorization token.", 401);
+    }
+
+    let payload;
+
+    try {
+        ({ payload } = await jwtVerify(token, getJwks()));
+    } catch {
+        throw new AuthError("Invalid or expired token.", 401);
+    }
+
+    const orgId = typeof payload.org_id === "string" ? payload.org_id : "";
+
+    if (!orgId) {
+        throw new AuthError("Token is missing org_id claim.", 401);
+    }
+
+    const scopes = typeof payload.scope === "string" ? payload.scope.split(" ") : [];
+    const sub = typeof payload.sub === "string" ? payload.sub : "";
+    const rawRoles = payload.roles;
+    const roles = Array.isArray(rawRoles)
+        ? (rawRoles as unknown[]).map(String)
+        : typeof rawRoles === "string" && rawRoles.length > 0
+        ? [rawRoles]
+        : [];
+
+    return { orgId, scopes, sub, roles };
+}
+
+type ScopePolicy = "any" | "all";
+
+function requireScope(claims: TokenClaims, requiredScopes: string[], policy: ScopePolicy = "any") {
+    const check = policy === "all"
+        ? requiredScopes.every((s) => claims.scopes.includes(s))
+        : requiredScopes.some((s) => claims.scopes.includes(s));
+
+    if (!check) {
+        throw new AuthError("Insufficient permissions.", 403);
     }
 }
 
@@ -102,64 +200,11 @@ function getAuthorizationHeader(request: IncomingMessage): string | undefined {
     return Array.isArray(authorization) ? authorization[0] : authorization;
 }
 
-function createApiClient(authorization?: string) {
-    const apiLogger = logger.child({ component: "api" });
-
-    async function requestApi(path: string, options: RequestInit = {}): Promise<JsonValue> {
-        const headers = new Headers(options.headers);
-        const method = options.method ?? "GET";
-
-        headers.set("Accept", "application/json");
-
-        if (options.body && !headers.has("Content-Type")) {
-            headers.set("Content-Type", "application/json");
-        }
-
-        if (authorization) {
-            headers.set("Authorization", authorization);
-        }
-
-        apiLogger.debug({ method, path }, "outbound request");
-
-        const t0 = Date.now();
-
-        const response = await fetch(`${appBaseUrl}${path}`, {
-            ...options,
-            headers,
-            signal: AbortSignal.timeout(30000),
-        });
-
-        const durationMs = Date.now() - t0;
-
-        apiLogger.info({ method, path, status: response.status, durationMs }, "response received");
-
-        const contentType = response.headers.get("content-type") || "";
-        const body = contentType.includes("application/json")
-            ? await response.json()
-            : await response.text();
-
-        if (!response.ok) {
-            apiLogger.warn({ method, path, status: response.status }, "upstream error response");
-            throw new ApiRequestError(`B2B app request failed with ${response.status}`, response.status, body as JsonValue);
-        }
-
-        return body as JsonValue;
-    }
-
-    return {
-        get: (path: string) => requestApi(path),
-        post: (path: string, body: JsonValue) => requestApi(path, {
-            method: "POST",
-            body: JSON.stringify(body),
-        }),
-        put: (path: string, body: JsonValue) => requestApi(path, {
-            method: "PUT",
-            body: JSON.stringify(body),
-        }),
-    };
+function generateBookingReference(): string {
+    return randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
 }
 
-function toToolContent(data: JsonValue) {
+function toToolContent(data: unknown) {
     return {
         content: [
             {
@@ -171,22 +216,6 @@ function toToolContent(data: JsonValue) {
 }
 
 function getFailureMessage(error: unknown) {
-    if (error instanceof ApiRequestError) {
-        if (typeof error.body === "object" && error.body !== null && !Array.isArray(error.body)) {
-            const body = error.body as Record<string, JsonValue>;
-
-            if (typeof body.error === "string") {
-                return body.error;
-            }
-
-            if (typeof body.message === "string") {
-                return body.message;
-            }
-        }
-
-        return error.message;
-    }
-
     return error instanceof Error ? error.message : "The booking request failed.";
 }
 
@@ -201,29 +230,51 @@ function toBookingFailureToolContent(error: unknown) {
         message: insufficientPermissions
             ? "Insufficient permissions. User authorization is required before creating this booking."
             : "The flight booking could not be created.",
-        statusCode: error instanceof ApiRequestError ? error.statusCode : 500,
+        statusCode: error instanceof AuthError ? error.statusCode : 500,
         success: false,
     });
 }
 
 function createEnterpriseMcpServer(authorization?: string, reqId?: number) {
-    const api = createApiClient(authorization);
-    const tokenPayload = decodeJwtPayload(getBearerToken(authorization));
+    const accessToken = getBearerToken(authorization);
+    const tokenPayload = decodeJwtPayload(accessToken);
+
+    let claimsPromise: Promise<TokenClaims> | null = null;
+
+    function getClaims(): Promise<TokenClaims> {
+        if (!claimsPromise) {
+            claimsPromise = verifyClaims(authorization);
+        }
+
+        return claimsPromise;
+    }
+
+    const subClaim = typeof tokenPayload?.sub === "string" ? tokenPayload.sub : null;
+    const actClaim = tokenPayload?.act ?? null;
+    const actSubClaim = actClaim && typeof actClaim === "object" && typeof (actClaim as { sub?: unknown }).sub === "string"
+        ? (actClaim as { sub: string }).sub
+        : null;
 
     const tokenContext = {
-        sub: typeof tokenPayload?.sub === "string" ? tokenPayload.sub : undefined,
+        sub: subClaim ?? undefined,
+        actSub: actSubClaim ?? undefined,
         org_id: typeof tokenPayload?.org_id === "string" ? tokenPayload.org_id : undefined,
         roles: Array.isArray(tokenPayload?.roles)
             ? tokenPayload.roles.map(String)
             : typeof tokenPayload?.roles === "string"
             ? [tokenPayload.roles]
             : [],
-        hasAct: tokenPayload?.act != null,
+        hasAct: actClaim != null,
     };
 
     const mcpLogger = logger.child({ component: "mcp", reqId });
     const toolLogger = logger.child({ component: "tool", reqId });
 
+    const tokenPayloadFields = tokenPayload
+        ? Object.entries(tokenPayload).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}`).join("\n")
+        : "  none";
+
+    mcpLogger.info(`access token payload:\n${tokenPayloadFields}`);
     mcpLogger.info({ ...tokenContext }, "creating MCP server instance");
 
     const server = new McpServer({
@@ -231,15 +282,36 @@ function createEnterpriseMcpServer(authorization?: string, reqId?: number) {
         version: "1.0.0",
     });
 
+    function logToolAuthFailure(name: string, err: unknown, durationMs: number) {
+        if (err instanceof AuthError && err.statusCode === 403) {
+            toolLogger.warn(
+                { tool: name, durationMs, statusCode: err.statusCode, actSub: actSubClaim, sub: subClaim, err: err.message },
+                "denied: insufficient permissions",
+            );
+
+            return true;
+        }
+
+        return false;
+    }
+
     async function runTool<T>(name: string, args: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
         toolLogger.info({ tool: name, args }, "invoked");
+        toolLogger.info(
+            `calling ${name} by ${ansiColor.green(`{act: ${actSubClaim ? JSON.stringify(actSubClaim) : "null"}, sub: ${subClaim ?? "null"}}`)}`,
+        );
         const t0 = Date.now();
         try {
             const result = await fn();
             toolLogger.info({ tool: name, durationMs: Date.now() - t0 }, "completed");
             return result;
         } catch (err) {
-            toolLogger.error({ tool: name, durationMs: Date.now() - t0, err }, "failed");
+            const durationMs = Date.now() - t0;
+
+            if (!logToolAuthFailure(name, err, durationMs)) {
+                toolLogger.error({ tool: name, durationMs, err }, "failed");
+            }
+
             throw err;
         }
     }
@@ -248,9 +320,12 @@ function createEnterpriseMcpServer(authorization?: string, reqId?: number) {
         "get_travel_policy",
         "Get the active travel policy for the authenticated organization. Use this before answering travel-policy questions and before creating a flight booking.",
         {},
-        () => runTool("get_travel_policy", {}, async () =>
-            toToolContent(await api.get("/api/travel-policies")),
-        ),
+        () => runTool("get_travel_policy", {}, async () => {
+            const claims = await getClaims();
+            requireScope(claims, ["mcp:" + Scope.TRAVEL_POLICY_VIEW]);
+
+            return toToolContent({ policy: getTravelPolicy(claims.orgId) });
+        }),
     );
 
     server.tool(
@@ -261,47 +336,19 @@ function createEnterpriseMcpServer(authorization?: string, reqId?: number) {
             max_flight_price: z.number().int().min(0).max(100000).optional(),
             price_cap_percent: z.number().int().min(0).max(200).optional(),
         },
-        (policy) => runTool("update_travel_policy", policy as Record<string, unknown>, async () =>
-            toToolContent(await api.put("/api/travel-policies", policy as JsonValue)),
-        ),
-    );
+        (policy) => runTool("update_travel_policy", policy as Record<string, unknown>, async () => {
+            const claims = await getClaims();
+            requireScope(claims, ["mcp:" + Scope.TRAVEL_POLICY_UPDATE]);
 
-    server.tool(
-        "list_organization_users",
-        "List users in the authenticated organization.",
-        {},
-        () => runTool("list_organization_users", {}, async () =>
-            toToolContent(await api.get("/api/organization/users")),
-        ),
-    );
+            const defaults = getTravelPolicy(claims.orgId);
+            const updated: Omit<TravelPolicy, "id" | "org_id" | "updated_at"> = {
+                domestic_cabin: policy.domestic_cabin ?? defaults?.domestic_cabin ?? "Economy",
+                max_flight_price: policy.max_flight_price ?? defaults?.max_flight_price ?? 500,
+                price_cap_percent: policy.price_cap_percent ?? defaults?.price_cap_percent ?? 20,
+            };
 
-    server.tool(
-        "invite_organization_user",
-        "Invite a new user to the authenticated organization.",
-        {
-            email: z.string().email().describe("The employee email address."),
-            givenName: z.string().optional().describe("The employee given name."),
-            familyName: z.string().optional().describe("The employee family name."),
-            role: z.enum(["Admin", "Member", "Idp Manager", "Basic Branding Editor", "Advanced Branding Editor"]).optional(),
-        },
-        ({ email, givenName, familyName, role }) =>
-            runTool("invite_organization_user", { email, givenName, familyName, role }, async () =>
-                toToolContent(await api.post("/api/organization/users", {
-                    email,
-                    givenName: givenName ?? "",
-                    familyName: familyName ?? "",
-                    role: role ?? "Member",
-                })),
-            ),
-    );
-
-    server.tool(
-        "list_organization_roles",
-        "List organization roles and assigned user IDs.",
-        {},
-        () => runTool("list_organization_roles", {}, async () =>
-            toToolContent(await api.get("/api/organization/roles")),
-        ),
+            return toToolContent({ policy: upsertTravelPolicy(claims.orgId, updated) });
+        }),
     );
 
     server.tool(
@@ -314,15 +361,9 @@ function createEnterpriseMcpServer(authorization?: string, reqId?: number) {
         },
         ({ from, to, cabin }) =>
             runTool("search_enterprise_flights", { from, to, cabin }, async () => {
-                const params = new URLSearchParams();
+                await getClaims();
 
-                if (from) params.set("from", from);
-                if (to) params.set("to", to);
-                if (cabin) params.set("cabin", cabin);
-
-                const path = `/api/flights${params.size > 0 ? `?${params.toString()}` : ""}`;
-
-                return toToolContent(await api.get(path));
+                return toToolContent({ flights: listFlights({ from, to, cabin }) });
             }),
     );
 
@@ -332,9 +373,17 @@ function createEnterpriseMcpServer(authorization?: string, reqId?: number) {
         {
             all: z.boolean().optional().describe("When true, admins can list all organization bookings."),
         },
-        ({ all }) => runTool("list_flight_bookings", { all }, async () =>
-            toToolContent(await api.get(`/api/bookings${all ? "?all=true" : ""}`)),
-        ),
+        ({ all }) => runTool("list_flight_bookings", { all }, async () => {
+            const claims = await getClaims();
+            requireScope(claims, ["mcp:" + Scope.BOOKING_VIEW]);
+
+            const isAdmin = getRolesFromPermissions(claims.roles).includes(UserRole.ADMIN);
+            const bookings = isAdmin && all
+                ? listOrgBookings(claims.orgId)
+                : listMyOrgBookings(claims.orgId, claims.sub);
+
+            return toToolContent({ bookings });
+        }),
     );
 
     server.tool(
@@ -349,21 +398,50 @@ function createEnterpriseMcpServer(authorization?: string, reqId?: number) {
         },
         ({ bookedByName, bookedForName, bookedForUserId, flightId, travelers }) =>
             runTool("create_flight_booking", { bookedForUserId, flightId, travelers }, async () => {
+                const t0 = Date.now();
+
                 try {
-                    const bookingResponse = await api.post("/api/bookings", {
+                    const claims = await getClaims();
+                    requireScope(claims, ["mcp:" + Scope.BOOKING_CREATE]);
+
+                    const isAdmin = getRolesFromPermissions(claims.roles).includes(UserRole.ADMIN);
+                    const travelerCount = travelers ?? 1;
+
+                    const flight = getFlightById(flightId);
+                    if (!flight) {
+                        throw new Error("Flight not found.");
+                    }
+
+                    const resolvedBookedForUserId = isAdmin && bookedForUserId ? bookedForUserId : null;
+                    const resolvedBookedForName = isAdmin && bookedForName ? bookedForName : null;
+                    const targetSub = resolvedBookedForUserId ?? claims.sub;
+
+                    const duplicate = findDuplicateOrgBooking(claims.orgId, targetSub, flightId);
+                    if (duplicate) {
+                        throw new Error("This flight is already booked.");
+                    }
+
+                    const booking = createOrgBooking({
+                        id: `booking-${randomUUID()}`,
+                        orgId: claims.orgId,
+                        bookingReference: generateBookingReference(),
+                        bookedForUserId: resolvedBookedForUserId,
+                        bookedForName: resolvedBookedForName,
+                        bookedBySub: claims.sub,
                         bookedByName: bookedByName ?? "AI-assisted user",
-                        bookedForName: bookedForName ?? "",
-                        bookedForUserId: bookedForUserId ?? "",
                         flightId,
-                        travelers: travelers ?? 1,
+                        travelers: travelerCount,
+                        bookingPrice: flight.price * travelerCount,
                     });
 
                     return toToolContent({
-                        data: bookingResponse,
+                        data: { booking },
                         message: "Flight booking created successfully.",
                         success: true,
                     });
                 } catch (error) {
+                    logToolAuthFailure("create_flight_booking", error, Date.now() - t0);
+
                     return toBookingFailureToolContent(error);
                 }
             }),

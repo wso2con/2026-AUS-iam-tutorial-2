@@ -29,4 +29,4 @@ The default endpoint is:
 http://localhost:8001/mcp
 ```
 
-The AI agent forwards its Asgardeo agent token to this server. The MCP server then forwards that token to protected Next.js API routes.
+The AI agent forwards its Asgardeo agent token to this server. The MCP server verifies that token itself (signature, org_id, scopes) and calls the webapp's service functions (DB queries, Asgardeo SCIM client) directly, instead of going through the Next.js API routes over REST.

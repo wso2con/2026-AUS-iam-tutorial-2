@@ -34,7 +34,7 @@ const flights = [
     price: 268,
     currency: "USD",
     cabin: "Economy",
-    dates: "Jun 12 - Jun 18",
+    dates: "jul 12 - jul 18",
     tags: JSON.stringify(["Best value", "Nonstop"]),
   },
   {
@@ -79,7 +79,7 @@ const flights = [
     price: 224,
     currency: "USD",
     cabin: "Economy",
-    dates: "Jun 20 - Jun 26",
+    dates: "Jul 20 - Jul 26",
     tags: JSON.stringify(["Beach trip"]),
   },
   {
@@ -94,7 +94,7 @@ const flights = [
     price: 132,
     currency: "USD",
     cabin: "Economy",
-    dates: "Jun 12 - Jun 18",
+    dates: "jul 12 - jul 18",
     tags: JSON.stringify(["Budget flight", "Direct"]),
   },
   {
@@ -109,7 +109,7 @@ const flights = [
     price: 289,
     currency: "USD",
     cabin: "Economy",
-    dates: "Jun 12 - Jun 18",
+    dates: "jul 12 - jul 18",
     tags: JSON.stringify(["Flexible ticket", "Carry-on included"]),
   },
   {
@@ -154,7 +154,7 @@ const flights = [
     price: 298,
     currency: "USD",
     cabin: "Economy",
-    dates: "Jun 12 - Jun 18",
+    dates: "jul 12 - jul 18",
     tags: JSON.stringify(["Evening", "Red-eye"]),
   },
   {
@@ -186,7 +186,7 @@ const flights = [
     price: 189,
     currency: "USD",
     cabin: "Economy",
-    dates: "Jun 15 - Jun 22",
+    dates: "jul 15 - jul 22",
     tags: JSON.stringify(["Early bird", "Nonstop"]),
   },
   {
@@ -201,7 +201,7 @@ const flights = [
     price: 214,
     currency: "USD",
     cabin: "Economy",
-    dates: "Jun 28 - Jul 05",
+    dates: "jul 28 - Jul 05",
     tags: JSON.stringify(["Nonstop"]),
   },
   {
@@ -445,7 +445,7 @@ const flights = [
     price: 385,
     currency: "USD",
     cabin: "Premium Economy",
-    dates: "Jun 25 - Jul 02",
+    dates: "jul 25 - Jul 02",
     tags: JSON.stringify(["Comfortable", "Extra legroom"]),
   },
   {
@@ -492,7 +492,7 @@ const flights = [
     price: 1450,
     currency: "USD",
     cabin: "Business",
-    dates: "Jun 12 - Jun 18",
+    dates: "jul 12 - jul 18",
     tags: JSON.stringify(["Lie-flat", "Premium lounge"]),
   },
   {
@@ -554,7 +554,7 @@ const flights = [
     price: 4800,
     currency: "USD",
     cabin: "First Class",
-    dates: "Jun 12 - Jun 18",
+    dates: "jul 12 - jul 18",
     tags: JSON.stringify(["Private suite", "Gourmet dining"]),
   },
 ];
