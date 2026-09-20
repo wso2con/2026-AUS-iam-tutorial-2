@@ -9,6 +9,10 @@ dist
 build
 .env
 .env*.local
+# Per-transport env files such as ai-agent/.env.whatsapp hold live credentials.
+# The *.example templates are the committed documentation of their keys.
+.env.*
+!.env*.example
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -16,3 +20,13 @@ pnpm-debug.log*
 .DS_Store
 tsconfig.tsbuildinfo
 data
+
+# Local demo credentials restored by scripts/restore-envs.sh - never commit
+env-backups/
+
+# Local setup helpers copied from the Drive bundle - not part of the tutorial repo
+scripts/
+
+# Agent runtime logs
+logs/
+*.log
